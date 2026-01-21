@@ -27,6 +27,10 @@ COPY . .
 
 # 安装 PHP 依赖
 RUN composer install --no-dev --optimize-autoloader
+# 确保 .env 存在并生成 APP_KEY
+RUN cp .env.example .env || true
+RUN php artisan key:generate
+
 
 # 安装前端依赖并构建
 RUN npm install && npm run build
