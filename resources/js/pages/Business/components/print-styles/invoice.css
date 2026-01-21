@@ -1,0 +1,368 @@
+/* 
+ * 专业发票打印样式 - 使用独立的CSS模块
+ * 确保在打印时样式不被覆盖
+ */
+
+/* ====== 基础重置 ====== */
+.print-invoice-wrapper {
+  all: initial !important;
+  display: block !important;
+  width: 210mm !important;
+  min-height: 297mm !important;
+  margin: 0 auto !important;
+  padding: 15mm !important;
+  background: white !important;
+  color: #000 !important;
+  font-family: "Microsoft YaHei", "SimHei", "PingFang SC", sans-serif !important;
+  line-height: 1.4 !important;
+  box-sizing: border-box !important;
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust: exact !important;
+}
+
+/* 重置所有子元素 */
+.print-invoice-wrapper * {
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-family: inherit !important;
+  line-height: inherit !important;
+  color: inherit !important;
+}
+
+/* ====== 发票容器 ====== */
+.print-invoice {
+  width: 100% !important;
+  height: 100% !important;
+  position: relative !important;
+}
+
+/* ====== 公司品牌区域 ====== */
+.print-invoice-header {
+  text-align: center !important;
+  margin-bottom: 12mm !important;
+  padding-bottom: 4mm !important;
+  border-bottom: 1.5pt solid #1a237e !important;
+}
+
+.print-invoice-company {
+  margin-bottom: 3mm !important;
+}
+
+.print-invoice-company-name {
+  font-size: 28pt !important;
+  font-weight: 900 !important;
+  color: #1a237e !important;
+  margin: 0 0 2mm 0 !important;
+  letter-spacing: 1px !important;
+  line-height: 1.1 !important;
+}
+
+.print-invoice-company-en {
+  font-size: 11pt !important;
+  color: #5c6bc0 !important;
+  margin: 0 0 1mm 0 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 1.2px !important;
+  font-weight: 600 !important;
+}
+
+.print-invoice-company-contact {
+  font-size: 9pt !important;
+  color: #666 !important;
+  margin: 0 !important;
+  font-style: italic !important;
+}
+
+/* ====== 发票标题 ====== */
+.print-invoice-title {
+  text-align: center !important;
+  margin: 8mm 0 !important;
+  padding: 4mm 0 !important;
+  border-top: 2pt solid #1a237e !important;
+  border-bottom: 2pt solid #1a237e !important;
+}
+
+.print-invoice-title-cn {
+  font-size: 18pt !important;
+  font-weight: 700 !important;
+  color: #1a237e !important;
+  margin: 0 0 1mm 0 !important;
+}
+
+.print-invoice-title-en {
+  font-size: 11pt !important;
+  color: #5c6bc0 !important;
+  margin: 0 !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.5px !important;
+}
+
+/* ====== 订单信息网格 ====== */
+.print-invoice-meta {
+  display: grid !important;
+  grid-template-columns: repeat(2, 1fr) !important;
+  gap: 3mm 6mm !important;
+  margin-bottom: 8mm !important;
+  padding: 4mm !important;
+  background: #f8f9fa !important;
+  border: 1pt solid #ddd !important;
+  border-radius: 2mm !important;
+  border-left: 4pt solid #1a237e !important;
+  font-size: 10pt !important;
+}
+
+.print-invoice-meta-item {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+}
+
+.print-invoice-meta-label {
+  color: #666 !important;
+  font-weight: 500 !important;
+  min-width: 30mm !important;
+}
+
+.print-invoice-meta-value {
+  color: #000 !important;
+  font-weight: 600 !important;
+  text-align: right !important;
+  flex: 1 !important;
+}
+
+.print-invoice-meta-value-bold {
+  font-weight: 700 !important;
+  color: #1a237e !important;
+}
+
+/* ====== 客户表格 ====== */
+.print-invoice-table-container {
+  margin: 8mm 0 10mm 0 !important;
+  overflow: hidden !important;
+}
+
+.print-invoice-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  font-size: 10pt !important;
+  table-layout: fixed !important;
+}
+
+/* 表头样式 */
+.print-invoice-table thead {
+  display: table-header-group !important;
+}
+
+.print-invoice-table thead th {
+  background: #1a237e !important;
+  color: white !important;
+  padding: 2.5mm 1.5mm !important;
+  border: 1pt solid #1a237e !important;
+  font-weight: 700 !important;
+  text-align: center !important;
+  vertical-align: middle !important;
+  height: 8mm !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* 表格列宽 */
+.print-invoice-col-index { width: 12mm !important; }
+.print-invoice-col-name { width: 45mm !important; }
+.print-invoice-col-nationality { width: 28mm !important; }
+.print-invoice-col-fee { width: 28mm !important; }
+.print-invoice-col-subtotal { width: 35mm !important; }
+
+/* 表格内容 */
+.print-invoice-table tbody td {
+  padding: 2mm 1.5mm !important;
+  border: 0.5pt solid #ccc !important;
+  vertical-align: middle !important;
+  height: 7mm !important;
+}
+
+.print-invoice-table tbody tr:nth-child(even) {
+  background: #f9f9f9 !important;
+}
+
+/* 单元格样式 */
+.print-invoice-cell-index {
+  text-align: center !important;
+  color: #666 !important;
+  font-weight: 500 !important;
+}
+
+.print-invoice-cell-name {
+  font-weight: 600 !important;
+  color: #000 !important;
+}
+
+.print-invoice-cell-nationality {
+  text-align: center !important;
+  color: #333 !important;
+}
+
+.print-invoice-cell-fee {
+  text-align: right !important;
+  color: #1a237e !important;
+  font-family: 'Courier New', 'Consolas', monospace !important;
+  font-weight: 500 !important;
+  padding-right: 3mm !important;
+}
+
+.print-invoice-cell-subtotal {
+  text-align: right !important;
+  background: #e8eaf6 !important;
+  color: #1a237e !important;
+  font-family: 'Courier New', 'Consolas', monospace !important;
+  font-weight: 700 !important;
+  padding-right: 3mm !important;
+}
+
+/* ====== 汇总区域 ====== */
+.print-invoice-summary {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: flex-start !important;
+  margin-top: 10mm !important;
+  page-break-inside: avoid !important;
+}
+
+.print-invoice-remark {
+  flex: 1 !important;
+  font-size: 9pt !important;
+  color: #666 !important;
+  padding: 3mm !important;
+  background: #f8f9fa !important;
+  border: 1pt dashed #ccc !important;
+  border-radius: 1.5mm !important;
+  min-height: 25mm !important;
+  margin-right: 8mm !important;
+}
+
+.print-invoice-remark-label {
+  font-weight: 700 !important;
+  color: #1a237e !important;
+  margin-right: 2mm !important;
+  display: block !important;
+  margin-bottom: 1mm !important;
+}
+
+.print-invoice-total {
+  min-width: 80mm !important;
+  text-align: right !important;
+}
+
+.print-invoice-total-row {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  padding: 3mm 0 !important;
+  border-top: 1.5pt solid #000 !important;
+  margin-bottom: 3mm !important;
+}
+
+.print-invoice-total-label {
+  font-size: 12pt !important;
+  font-weight: 700 !important;
+  color: #000 !important;
+}
+
+.print-invoice-total-amount {
+  font-size: 22pt !important;
+  font-weight: 900 !important;
+  color: #d32f2f !important;
+  margin-left: 8mm !important;
+}
+
+.print-invoice-amount-words {
+  font-size: 9pt !important;
+  color: #666 !important;
+  font-style: italic !important;
+  padding: 2mm !important;
+  background: #f5f5f5 !important;
+  border-radius: 1.5mm !important;
+  border-left: 2pt solid #1a237e !important;
+}
+
+/* ====== 签名区域 ====== */
+.print-invoice-footer {
+  margin-top: 20mm !important;
+  padding-top: 8mm !important;
+  border-top: 1pt solid #ccc !important;
+  page-break-inside: avoid !important;
+}
+
+.print-invoice-signatures {
+  display: flex !important;
+  justify-content: space-between !important;
+  margin-bottom: 15mm !important;
+  padding: 0 10mm !important;
+}
+
+.print-invoice-signature {
+  width: 60mm !important;
+  text-align: center !important;
+}
+
+.print-invoice-signature-line {
+  border-bottom: 1pt solid #666 !important;
+  height: 20mm !important;
+  margin-bottom: 3mm !important;
+}
+
+.print-invoice-signature-label {
+  font-size: 9pt !important;
+  color: #666 !important;
+  font-weight: 500 !important;
+}
+
+.print-invoice-footer-info {
+  display: flex !important;
+  justify-content: space-between !important;
+  padding-top: 4mm !important;
+  border-top: 0.5pt solid #ddd !important;
+  font-size: 8pt !important;
+  color: #999 !important;
+}
+
+.print-invoice-system-info {
+  font-style: italic !important;
+}
+
+.print-invoice-page-info {
+  font-weight: 500 !important;
+}
+
+/* ====== 打印优化 ====== */
+@media print {
+  .print-invoice-wrapper {
+    padding: 15mm !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+  
+  /* 确保背景色打印 */
+  .print-invoice-table thead th,
+  .print-invoice-cell-subtotal {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  
+  /* 避免分页问题 */
+  .print-invoice-table {
+    page-break-inside: auto !important;
+  }
+  
+  .print-invoice-table tbody tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+  
+  .print-invoice-summary,
+  .print-invoice-footer {
+    page-break-inside: avoid !important;
+  }
+}

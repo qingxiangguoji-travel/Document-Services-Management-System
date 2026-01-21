@@ -1,0 +1,32 @@
+/* ===== 基础复位与标准变量 ===== */
+:root {
+  --primary-color: #2563eb;
+  --header-bg: #1e293b;    /* 深色页头背景 */
+  --page-bg: #f1f5f9;      /* 页面浅灰背景 */
+  --radius-main: 12px;     /* 卡片圆角 */
+  --header-padding: 20px 30px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background-color: var(--page-bg); font-family: "Inter", system-ui, sans-serif; color: #333; }
+
+/* ===== 统一卡片样式（覆盖原有的 .page） ===== */
+.section-card {
+  background: #fff;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 0 0 var(--radius-main) var(--radius-main) !important;
+  margin-bottom: 20px;
+  border-top: none !important; /* 紧贴页头，所以去掉上边框 */
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+/* 搜索卡片专用（如果是独立的，可以带圆角） */
+.search-card {
+  border-radius: 0 0 var(--radius-main) var(--radius-main) !important;
+}
+
+/* ===== 按钮与输入框保持你原有的 32px 规范，但增加美化 ===== */
+.btn-emphasize {
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+}
