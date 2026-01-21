@@ -12,27 +12,21 @@ return [
     | Default Log Channel
     |--------------------------------------------------------------------------
     |
-    | This option defines the default log channel that is utilized to write
-    | messages to your logs. The value provided here should match one of
-    | the channels present in the list of "channels" configured below.
+    | 强制使用 stderr（容器标准做法）
+    | 不再写 storage/logs/laravel.log
     |
     */
 
-    'default' => env('LOG_CHANNEL', 'stack'),
+    'default' => 'stderr',
 
     /*
     |--------------------------------------------------------------------------
     | Deprecations Log Channel
     |--------------------------------------------------------------------------
-    |
-    | This option controls the log channel that should be used to log warnings
-    | regarding deprecated PHP and library features. This allows you to get
-    | your application ready for upcoming major versions of dependencies.
-    |
     */
 
     'deprecations' => [
-        'channel' => env('LOG_DEPRECATIONS_CHANNEL', 'null'),
+        'channel' => 'stderr',
         'trace' => env('LOG_DEPRECATIONS_TRACE', false),
     ],
 
@@ -40,24 +34,18 @@ return [
     |--------------------------------------------------------------------------
     | Log Channels
     |--------------------------------------------------------------------------
-    |
-    | Here you may configure the log channels for your application. Laravel
-    | utilizes the Monolog PHP logging library, which includes a variety
-    | of powerful log handlers and formatters that you're free to use.
-    |
-    | Available drivers: "single", "daily", "slack", "syslog",
-    |                    "errorlog", "monolog", "custom", "stack"
-    |
     */
 
     'channels' => [
 
+        // 兼容保留 stack，但也强制走 stderr
         'stack' => [
-    'driver' => 'stack',
-    'channels' => ['stderr'],
-    'ignore_exceptions' => false,
-],
+            'driver' => 'stack',
+            'channels' => ['stderr'],
+            'ignore_exceptions' => false,
+        ],
 
+        // 单文件日志（本地开发用，云端不会用到）
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),
@@ -89,11 +77,12 @@ return [
             'handler_with' => [
                 'host' => env('PAPERTRAIL_URL'),
                 'port' => env('PAPERTRAIL_PORT'),
-                'connectionString' => 'tls://'.env('PAPERTRAIL_URL').':'.env('PAPERTRAIL_PORT'),
+                'connectionString' => 'tls://' . env('PAPERTRAIL_URL') . ':' . env('PAPERTRAIL_PORT'),
             ],
             'processors' => [PsrLogMessageProcessor::class],
         ],
 
+        // 云 / Docker / Render 标准输出通道
         'stderr' => [
             'driver' => 'monolog',
             'level' => env('LOG_LEVEL', 'debug'),
@@ -123,6 +112,7 @@ return [
             'handler' => NullHandler::class,
         ],
 
+        // 兜底（理论上不会再用到文件日志）
         'emergency' => [
             'path' => storage_path('logs/laravel.log'),
         ],
