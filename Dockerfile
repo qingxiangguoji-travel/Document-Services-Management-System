@@ -42,9 +42,9 @@ COPY nginx.conf /etc/nginx/sites-available/default
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-# 修复权限
+# 修复 Laravel 运行权限
+RUN chmod -R 775 storage bootstrap/cache
 RUN chown -R www-data:www-data storage bootstrap/cache
 
 EXPOSE 10000
-
 CMD ["/start.sh"]
