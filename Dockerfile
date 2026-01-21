@@ -43,8 +43,9 @@ COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
 # 修复 Laravel 运行权限
-RUN chmod -R 775 storage bootstrap/cache
-RUN chown -R www-data:www-data storage bootstrap/cache
+RUN mkdir -p storage/logs \
+ && chmod -R 775 storage bootstrap/cache \
+ && chown -R www-data:www-data storage bootstrap/cache
 
 EXPOSE 10000
 CMD ["/start.sh"]
