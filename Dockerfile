@@ -1,8 +1,9 @@
 FROM php:8.2-fpm
 
-# ===============================
-# 系统依赖 + PHP 扩展依赖
-# ===============================
+# 强制 Render 丢弃缓存，重新编译镜像
+ARG CACHEBUST=1
+
+# 安装系统依赖 + PostgreSQL 编译依赖
 RUN apt-get update && apt-get install -y \
     git \
     unzip \
@@ -10,12 +11,12 @@ RUN apt-get update && apt-get install -y \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
-    libpq-dev \
     zip \
     nodejs \
     npm \
     nginx \
     supervisor \
+    libpq-dev \
     && docker-php-ext-install \
         pdo_mysql \
         pdo_pgsql \
@@ -23,56 +24,34 @@ RUN apt-get update && apt-get install -y \
         exif \
         pcntl \
         bcmath \
-        gd \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+        gd
 
-# ===============================
-# Composer
-# ===============================
+# 安装 Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# ===============================
-# 工作目录
-# ===============================
+# 设置工作目录
 WORKDIR /var/www
 
-# ===============================
-# 拷贝代码
-# ===============================
+# 复制项目文件
 COPY . .
 
-# ===============================
-# PHP 依赖
-# ===============================
+# 安装 PHP 依赖
 RUN composer install --no-dev --optimize-autoloader
 
-# ===============================
-# 前端构建
-# ===============================
+# 构建前端
 RUN npm install && npm run build
 
-# ===============================
 # Nginx 配置
-# ===============================
 COPY nginx.conf /etc/nginx/sites-available/default
 
-# ===============================
 # 启动脚本
-# ===============================
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-# ===============================
-# Laravel 权限修复（构建阶段）
-# ===============================
+# Laravel 运行权限
 RUN mkdir -p storage/logs bootstrap/cache \
- && chmod -R 775 storage bootstrap/cache \
- && chown -R www-data:www-data storage bootstrap/cache
+ && chown -R www-data:www-data storage bootstrap/cache \
+ && chmod -R 775 storage bootstrap/cache
 
-# ===============================
-# 端口
-# ===============================
 EXPOSE 10000
-
 CMD ["/start.sh"]
