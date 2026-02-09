@@ -276,7 +276,7 @@ export function useTableData(
       upstream_time: '',
       upstream_fee: null,
       upstream_is_settled: '否',
-      process_status: '',
+      process_status: 'created',
       upstream_remark: '',
       business_end_time: '',
       business_return_time: '',

@@ -22,7 +22,7 @@
 
     <div class="drawer-pro-content">
       <el-alert 
-        title="测试模式已开启：您可以直接点击上传查看 UI 效果，支持重命名和预览。" 
+        title="文件将直接写入【文件中心】，这里是快捷面板。支持上传、预览、复制清单。" 
         type="info" 
         :closable="false" 
         show-icon
@@ -39,13 +39,6 @@
               class="group-name-input"
             />
           </div>
-          <el-button 
-            v-if="!isFixed(group.title)" 
-            type="danger" 
-            link 
-            icon="Delete" 
-            @click="removeGroup(idx)"
-          >移除项目</el-button>
         </div>
 
         <div class="group-content">
@@ -57,8 +50,8 @@
               <div class="file-info">
                 <span class="file-name" @click="previewFile(file)" :title="file.name">{{ file.name }}</span>
                 <div class="action-row">
-                  <el-button link type="primary" icon="EditPen" @click="renameFile(idx, fIdx)">改名</el-button>
-                  <el-button link type="danger" icon="CircleClose" @click="removeFile(idx, fIdx)">删除</el-button>
+                  <el-button link type="primary" icon="EditPen" @click="renameFile(file)">改名</el-button>
+                  <el-button link type="danger" icon="CircleClose" @click="removeFile(file)">删除</el-button>
                 </div>
               </div>
             </div>
@@ -66,14 +59,14 @@
             <el-upload
               action="#"
               :auto-upload="false"
-              :on-change="(file) => handleSimulateUpload(file, idx)"
+              :on-change="(file) => handleUpload(file, idx)"
               :show-file-list="false"
               multiple
               class="upload-card-wrapper"
             >
               <div class="upload-trigger-btn">
                 <el-icon><Plus /></el-icon>
-                <span>点击测试上传</span>
+                <span>点击上传到文件中心</span>
               </div>
             </el-upload>
           </div>
@@ -89,10 +82,9 @@
 
     <template #footer>
       <div class="drawer-footer">
-        <span class="footer-tip">已录入 {{ totalFilesCount }} 份资料</span>
+        <span class="footer-tip">共 {{ totalFilesCount }} 份资料（实时同步文件中心）</span>
         <div>
-          <el-button size="large" @click="internalVisible = false">取消</el-button>
-          <el-button type="primary" size="large" @click="handleConfirm" class="save-btn">保存并更新</el-button>
+          <el-button size="large" @click="internalVisible = false">关闭</el-button>
         </div>
       </div>
     </template>
@@ -100,88 +92,217 @@
 </template>
 
 <script setup>
-import { ref, watch, computed } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { FolderOpened, Document, Plus, Delete, EditPen, CircleClose, Share, Files, CirclePlus } from '@element-plus/icons-vue';
+import { useRouter } from 'vue-router'
+import { ref, watch, computed, nextTick } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  FolderOpened, Document, Plus, EditPen, CircleClose,
+  Share, Files, CirclePlus
+} from '@element-plus/icons-vue'
+// 🟢 ADD：统一走文件服务
+import { fileService } from '@/domain/services/fileService'
 
-const props = defineProps(['visible', 'customerData']);
-const emit = defineEmits(['update:visible', 'save']);
 
-const internalVisible = computed({
-  get: () => props.visible,
-  set: (v) => emit('update:visible', v)
-});
+// ===== 文件读取 =====
+const readFileAsDataURL = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('读取文件失败'))
+    reader.readAsDataURL(file)
+  })
 
-const FIXED = ['护照封面', '护照首页', '签证页', '劳工证', '签证成品', '劳工证成品'];
-const localGroups = ref([]);
-const isFixed = (t) => FIXED.includes(t);
-const totalFilesCount = computed(() => localGroups.value.reduce((s, g) => s + g.files.length, 0));
+const detectFileType = (mime = '', name = '') => {
+  const m = String(mime).toLowerCase()
+  const n = String(name).toLowerCase()
+  if (m.startsWith('image/')) return 'image'
+  if (m === 'application/pdf' || n.endsWith('.pdf')) return 'pdf'
+  return 'other'
+}
 
-watch(() => props.visible, (val) => {
-  if (val) {
-    localGroups.value = props.customerData?.files?.length 
-      ? JSON.parse(JSON.stringify(props.customerData.files))
-      : FIXED.map(t => ({ title: t, files: [] }));
+const router = useRouter()
+
+const props = defineProps({
+  visible: Boolean,
+  customerData: Object,
+  orderData: Object
+})
+
+const emit = defineEmits(['update:visible'])
+
+const internalVisible = ref(false)
+
+watch(
+  () => props.visible,
+  (v) => {
+    internalVisible.value = !!v
+  },
+  { immediate: true }
+)
+
+watch(internalVisible, async (v) => {
+  emit('update:visible', !!v)
+  if (v) await loadFromCenter()
+})
+
+
+// ===== 固定分类 =====
+const FIXED = ['护照封面', '护照首页', '签证页', '劳工证', '签证成品', '劳工证成品']
+
+const localGroups = ref([])
+const isFixed = (t) => FIXED.includes(t)
+
+const totalFilesCount = computed(() =>
+  (localGroups.value || []).reduce((s, g) => s + (g.files?.length || 0), 0)
+)
+
+// ===== 从文件中心加载 =====
+const groupByCategory = (files) => {
+  const map = new Map()
+
+  FIXED.forEach(t => map.set(t, []))
+
+  files.forEach(f => {
+    const cat = f.category || '未分类'
+    if (!map.has(cat)) map.set(cat, [])
+    map.get(cat).push(f)
+  })
+
+  return Array.from(map.entries()).map(([title, files]) => ({
+    title,
+    files
+  }))
+}
+
+// 🟢 ADD：从 fileService 读取（IndexedDB / API 都走这里）
+const loadFromCenter = async () => {
+  const all = (await fileService.list()) || []
+
+  const orderId = String(props.orderData?.id || '')
+  const orderCode = String(props.orderData?.order_no || props.orderData?.code || '')
+
+  const scoped = all.filter(f =>
+    String(f.orderId || '') === orderId ||
+    String(f.orderCode || '') === orderCode
+  )
+
+  localGroups.value = groupByCategory(scoped)
+}
+
+
+// ===== 上传直写文件中心 =====
+const handleUpload = async (file, gIdx) => {
+  const raw = file?.raw
+  if (!raw) return
+
+  try {
+    const dataUrl = await readFileAsDataURL(raw)
+
+        // 🟢 ADD：上传统一走 fileService（不再写 localStorage）
+    await fileService.upload({
+      name: raw.name,
+
+      category: localGroups.value[gIdx]?.title || '',
+
+      orderId: props.orderData?.id || '',
+      orderCode: props.orderData?.order_no || props.orderData?.code || '',
+      customerName: props.customerData?.name || '',
+
+      agentContact: '', // Drawer 里暂时没有这个字段
+
+      fileType: detectFileType(raw.type, raw.name),
+      mimeType: raw.type,
+      size: raw.size,
+
+      dataUrl,
+      uploadedBy: '当前用户'
+    })
+
+
+    await loadFromCenter()
+    ElMessage.success(`已上传：${raw.name}`)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('上传失败，可能是文件过大或存储容量不足')
   }
-});
+}
 
-/**
- * 模拟上传函数
- */
-const handleSimulateUpload = (file, gIdx) => {
-  const mockUrl = URL.createObjectURL(file.raw);
-  localGroups.value[gIdx].files.push({ 
-    name: file.name, 
-    url: mockUrl, 
-    time: new Date().toLocaleDateString()
-  });
-  ElMessage.success(`[模拟成功] 已添加：${file.name}`);
-};
-
-const renameFile = (gIdx, fIdx) => {
-  const file = localGroups.value[gIdx].files[fIdx];
+// ===== 操作 =====
+const renameFile = (file) => {
   ElMessageBox.prompt('请输入新的文件名', '修改文件名', {
     inputValue: file.name,
     confirmButtonText: '确定',
     cancelButtonText: '取消'
-  }).then(({ value }) => {
-    if (value) {
-      file.name = value;
-      ElMessage.success('名称已修改');
-    }
-  });
-};
+  }).then(async ({ value }) => {
+    const v = (value || '').trim()
+    if (!v) return
 
-const previewFile = (file) => {
-  if (file.url) {
-    window.open(file.url, '_blank');
+    try {
+      await fileService.update(file.id, { name: v })
+      await loadFromCenter()
+      ElMessage.success('名称已修改')
+    } catch (e) {
+      console.error(e)
+      ElMessage.error('修改失败')
+    }
+  })
+}
+
+const removeFile = (file) => {
+  ElMessageBox.confirm('确定删除此文件？', '删除确认', { type: 'warning' })
+    .then(async () => {
+      try {
+        await fileService.delete(file, '管理员')
+        await loadFromCenter()
+        ElMessage.success('文件已删除')
+      } catch (e) {
+        console.error(e)
+        ElMessage.error('删除失败')
+      }
+    })
+}
+
+
+// 🟢 ADD：支持 IndexedDB Blob / DataURL
+const previewFile = async (file) => {
+  if (!file) return
+
+  try {
+    const url = await fileService.getContent(file.id)
+    window.open(url, '_blank')
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('预览失败')
   }
-};
+}
+
 
 const copyFileList = () => {
-  const text = localGroups.value
-    .filter(g => g.files.length > 0)
+  const text = (localGroups.value || [])
+    .filter(g => (g.files?.length || 0) > 0)
     .map(g => `【${g.title}】: ${g.files.map(f => f.name).join(', ')}`)
-    .join('\n');
-  navigator.clipboard.writeText(text);
-  ElMessage.success('清单已复制');
-};
+    .join('\n')
+
+  navigator.clipboard.writeText(text)
+  ElMessage.success('清单已复制')
+}
 
 const jumpToFileCenter = () => {
-  window.open('/files', '_blank');
-};
+  router.push({
+    name: 'business.files',
+    query: {
+      orderId: props.orderData?.id || '',
+      orderCode: props.orderData?.order_no || props.orderData?.code || '',
+      customerName: props.customerData?.name || ''
+    }
+  })
+}
 
-const addGroup = () => localGroups.value.push({ title: '新增资料项', files: [] });
-const removeGroup = (idx) => localGroups.value.splice(idx, 1);
-const removeFile = (gIdx, fIdx) => localGroups.value[gIdx].files.splice(fIdx, 1);
-
-const handleConfirm = () => {
-  emit('save', JSON.parse(JSON.stringify(localGroups.value)));
-  internalVisible.value = false;
-};
+const addGroup = () => localGroups.value.push({ title: '新增资料项', files: [] })
 </script>
 
 <style scoped>
+/* 原样保留你的样式 */
 .drawer-header-pro { display: flex; justify-content: space-between; align-items: center; width: 100%; padding-right: 20px; }
 .header-left { display: flex; align-items: center; gap: 12px; }
 .header-title { font-size: 18px; font-weight: 800; color: #1a1a1a; }
@@ -214,5 +335,4 @@ const handleConfirm = () => {
 .add-group-btn { width: 100%; height: 45px; border-style: dashed; margin-top: 10px; }
 .drawer-footer { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; }
 .footer-tip { color: #94a3b8; font-size: 13px; }
-.save-btn { padding-left: 30px; padding-right: 30px; font-weight: bold; }
 </style>

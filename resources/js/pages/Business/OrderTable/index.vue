@@ -1,15 +1,17 @@
 <template>
-  <div class="table-container">
+  <div class="table-container" ref="containerRef">
     <!-- 表格主体 -->
     <TableBody
       ref="tableBodyRef"
       :data="displayData"
+	  :table-height="tableHeight"
       :module="module"
       :visible-columns="visibleColumns"
       :options="options"
       :date-shortcuts="dateShortcuts"
       :column-visibility="columnVisibility"
-      :table-height="tableHeight"
+	  :order-status-editable="props.canEditStatus"
+      :process-status-options="processStatusOptions"
       @row-contextmenu="handleRowContextMenu"
       @row-click="handleRowClick"
       @remove-row="handleRemoveRow"
@@ -17,6 +19,7 @@
       @customer-info-change="handleCustomerInfoChange"
       @fee-change="handleFeeChange"
       @show-column-menu="handleShowColumnMenu"
+	  @process-change="handleProcessChange"
     />
 
     <!-- 表格底部合计行 -->
@@ -54,8 +57,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, nextTick, watch, onUnmounted, toRef } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, onMounted, nextTick, watch, onUnmounted, toRef, computed } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import TableBody from './components/TableBody.vue'
 import TableFooter from './components/TableFooter.vue'
@@ -67,12 +70,16 @@ import { useTableData } from './composables/useTableData'
 import { useRowActions } from './composables/useRowActions'
 import { db } from '@/utils/storage'
 import type { ModuleType, TableRow } from './types/table'
+import { getStatusOptions } from '@/domain/orderStatus'
+
 
 /* ===================== props / emits ===================== */
 const props = defineProps<{
   data: any[]
   orderNo: string
   module: ModuleType
+  orderType: 'notify' | 'confirmed' | 'history'
+  canEditStatus: boolean
 }>()
 
 const emit = defineEmits<{
@@ -82,10 +89,14 @@ const emit = defineEmits<{
   (e: 'add-business', customerId: string): void
   (e: 'paste-data', text: string): void
   (e: 'hide-row', rowId: string): void
+  (e: 'convert-to-confirm'): void
+  (e: 'process-change', newStatus: string, row: TableRow, oldStatus?: string): void
 }>()
 
 /* ===================== refs ===================== */
 const tableBodyRef = ref()
+const containerRef = ref<HTMLElement | null>(null)
+const tableHeight = ref<number>(300)
 const activeRow = ref<any>(null)
 
 // 稳定客户选中
@@ -95,9 +106,6 @@ const activeCustomerId = ref<string | null>(null)
 const dataRef = toRef(props, 'data')
 const orderNoRef = toRef(props, 'orderNo')
 const moduleRef = toRef(props, 'module')
-
-/* ===================== 表格高度 ===================== */
-const tableHeight = ref('100%')
 
 /* ===================== 配置选项 ===================== */
 const options = reactive({
@@ -217,14 +225,62 @@ const loadOptions = () => {
   options.departments = configs.departments || []
 }
 
+const MAX_VISIBLE_ROWS = 10
+
 const calculateTableHeight = () => {
   nextTick(() => {
-    const container = document.querySelector('.table-main-area')
+    const container = containerRef.value
     if (!container) return
-    const rect = container.getBoundingClientRect()
-    tableHeight.value = Math.max(rect.height - 60, 200)
+
+    const footer = container.querySelector('.table-footer') as HTMLElement | null
+    const footerHeight = footer?.offsetHeight || 60
+
+    // ✅ 关键：留给表格的真实可用高度（必须扣掉 footer）
+    const availableForTable = Math.max(container.clientHeight - footerHeight, 200)
+
+    // 取一行真实高度（没有行就用兜底）
+    const tr = container.querySelector('.el-table__body tbody tr') as HTMLElement | null
+    const rowH = tr ? tr.getBoundingClientRect().height : 38
+
+    const HEADER = 48
+    const SAFE = 6
+
+    // ✅ 10 行目标高度（表格 height = header + 10行）
+    const heightFor10Rows = Math.round(HEADER + rowH * MAX_VISIBLE_ROWS + SAFE)
+
+    // ✅ 最终：不能超过可用高度，否则 footer 会被挤没
+    tableHeight.value = Math.min(availableForTable, heightFor10Rows)
+
+    console.log('[TABLE HEIGHT]', {
+      container: container.clientHeight,
+      footerHeight,
+      availableForTable,
+      rowH,
+      heightFor10Rows,
+      final: tableHeight.value
+    })
   })
 }
+
+const handleConvertToConfirm = () => {
+  ElMessage.success('正在生成确认订单...')
+  emit('convert-to-confirm')
+}
+
+const processStatusOptions = computed(() => getStatusOptions())
+
+
+// ===================== 办理状态：是否允许编辑（严格按你当前组件的 props） =====================
+
+// ===================== 办理状态变更：你的业务规则中枢 =====================
+const handleProcessChange = (
+  newStatus: string,
+  row: TableRow,
+  oldStatus?: string
+) => {
+  emit('process-change', newStatus, row, oldStatus ?? row.process_status)
+}
+
 
 /* ===================== 行选中 ===================== */
 const handleRowClick = (row: TableRow) => {
@@ -248,6 +304,10 @@ const handleOpenFiles = (row: any) => {
 
 /* ===================== 数据变更 ===================== */
 const handleCustomerInfoChange = (row: any, field: string, value: any) => {
+// =======================
+// 办理状态业务规则拦截
+// =======================
+
   const nested = convertToNestedStructure(dataRef.value)
 
   const customer = nested.find(c => c.customer_id === row.customer_id)
@@ -378,16 +438,18 @@ const handlePasteRows = () => {
 /* ===================== 生命周期 ===================== */
 onMounted(() => {
   init()
+  calculateTableHeight()
   window.addEventListener('resize', calculateTableHeight)
 })
 
 watch(
   () => props.data,
   () => {
-    nextTick(calculateTableHeight)
+    calculateTableHeight()
   },
   { deep: true }
 )
+
 
 onUnmounted(() => {
   window.removeEventListener('resize', calculateTableHeight)
@@ -395,10 +457,11 @@ onUnmounted(() => {
 </script>
 <style scoped>
 .table-container {
-  height: 100%;
-  overflow: hidden;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* 外层不滚动 */
   position: relative;
 }
 
@@ -459,5 +522,26 @@ onUnmounted(() => {
 :deep(.el-table__row:hover) {
   background-color: #f1f5f9 !important;
 }
+
+:deep(td.sticky-last-marker) {
+  position: relative;
+}
+
+:deep(td.sticky-last-marker)::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100%;
+  background: linear-gradient(
+    to right,
+    rgba(6, 182, 212, 0.6),
+    rgba(6, 182, 212, 0.2)
+  );
+  pointer-events: none;
+}
+
+
 
 </style>

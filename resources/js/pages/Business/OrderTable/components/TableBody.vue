@@ -5,14 +5,13 @@
       :data="tableData"
       row-key="id"
       border 
-      :height="tableHeight"
-      style="width: 100%" 
+	  :height="props.tableHeight"
       size="small"
       :resizable="true"
       @column-resize="handleColumnResize"
 	  @header-contextmenu="handleHeaderContextMenu"  
       header-cell-class-name="custom-header-cell"
-      cell-class-name="custom-content-cell"
+      :cell-class-name="cellClassName"
       :row-class-name="tableRowClassName"
 	  @row-contextmenu="handleRowContextMenu"
 	  @row-click="handleRowClick"
@@ -704,29 +703,48 @@
             </template>
           </el-table-column>
 
-          <el-table-column 
-            v-if="isColumnVisible('process_status')"
-            label="办理状态" 
-            width="110" 
-            align="center" 
-            column-key="process_status"
-          >
-            <template #default="scope">
-              <el-select 
-                :model-value="scope.row.process_status"
-                size="small" 
-                class="cell-select"
-                @update:model-value="value => handleCellChange(scope.row, 'process_status', value)"
-              >
-                <el-option v-for="item in options.orderStatuses" :key="item.value" :label="item.label" :value="item.value" />
-              </el-select>
-            </template>
-            <template #header="{ column }">
-              <div class="header-cell" @contextmenu.prevent="$emit('show-column-menu', column, $event)">
-                {{ column.label }}
-              </div>
-            </template>
-          </el-table-column>
+<el-table-column 
+  v-if="isColumnVisible('process_status')"
+  label="办理状态" 
+  width="110" 
+  align="center" 
+  column-key="process_status"
+>
+  <template #default="scope">
+    <el-select
+      :model-value="scope.row.process_status"
+      size="small"
+      class="cell-select"
+      placeholder="选择状态"
+	  :disabled="!props.orderStatusEditable"
+	   @visible-change="v => {
+  if (v && scope.row._oldProcessStatus === undefined) {
+    scope.row._oldProcessStatus = scope.row.process_status
+  }
+}"
+
+  @change="val => emit(
+    'process-change',
+    val,
+    scope.row,
+    scope.row._oldProcessStatus
+  )"
+>
+      <el-option
+        v-for="opt in props.processStatusOptions"
+        :key="opt.value"
+        :label="opt.label"
+        :value="opt.value"
+      />
+    </el-select>
+  </template>
+  <template #header="{ column }">
+    <div class="header-cell" @contextmenu.prevent="$emit('show-column-menu', column, $event)">
+      {{ column.label }}
+    </div>
+  </template>
+</el-table-column>
+
 
           <el-table-column 
             v-if="isColumnVisible('upstream_remark')"
@@ -849,6 +867,8 @@ import { useMergeRules } from '../composables/useMergeRules'
 import { ref, computed } from 'vue'
 import { Picture, Delete } from '@element-plus/icons-vue'
 import type { TableRow, ModuleType } from '../types/table'
+import { getStatusColor } from '@/domain/orderStatus'
+import { columnDefinitions } from '../config/columns'
 
 interface Props {
   data: TableRow[]
@@ -856,7 +876,11 @@ interface Props {
   options: any
   dateShortcuts: any[]
   columnVisibility: Record<string, boolean>
-  tableHeight?: string
+  tableHeight: number
+
+  // 🔥 状态控制只来自父组件
+  orderStatusEditable: boolean
+  processStatusOptions: { label: string; value: string }[]
 }
 
 interface Emits {
@@ -871,7 +895,26 @@ interface Emits {
   (e: 'fee-change', row: any, field: string, value: any): void
   (e: 'column-resize', column: any, width: number): void
   (e: 'show-column-menu', column: any, event: MouseEvent): void
+  (e: 'convert-to-confirm', row: any): void
+  (e: 'process-change', newStatus: string, row: TableRow): void
 }
+
+// =====================
+// 固定区分界线语义控制
+// =====================
+const fixedEndKeys = computed(() => {
+  return columnDefinitions
+    .filter(c => c.isFixedEnd)
+    .map(c => c.key)
+})
+
+const cellClassName = ({ column }) => {
+  if (fixedEndKeys.value.includes(column.columnKey)) {
+    return 'custom-content-cell col-fixed-end'
+  }
+  return 'custom-content-cell'
+}
+
 const handleNativeContextMenu = (event: MouseEvent) => {
   const target = event.target as HTMLElement
   if (!target) return
@@ -913,9 +956,7 @@ const handleHeaderContextMenu = (column: any, event: MouseEvent) => {
   emit('show-column-menu', column, event)
 }
 
-const props = withDefaults(defineProps<Props>(), {
-  tableHeight: '100%'
-})
+const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const tableRef = ref()
@@ -976,6 +1017,7 @@ const setLocalFeeValue = (row: any, field: string, value: number | null) => {
 
 // 单元格变化
 const handleCellChange = (row: TableRow, field: string, value: any) => {
+  if (field === 'process_status') return
   const isMoneyField =
     field.startsWith('fee_') ||
     field.startsWith('fine_') ||
@@ -1068,9 +1110,90 @@ const handleColumnResize = (column: any, width: number) => {
   emit('column-resize', column, width)
 }
 
-const tableRowClassName = ({ rowIndex }: { rowIndex: number }) => {
-  return rowIndex % 2 === 0 ? 'even-row' : 'odd-row'
+// 🔥 显示值 → 系统值 归一化
+const normalizeStatus = (status?: string) => {
+  if (!status) return 'created'
+
+  const map: Record<string, string> = {
+    // 英文兜底
+    Pending: 'created',
+    Created: 'created',
+
+    // 中文显示值
+    已录入: 'created',
+
+    未付未办理: 'unpaid_pending',
+    未付办理中: 'unpaid_processing',
+    未付已完成: 'unpaid_completed',
+
+    已付未办理: 'paid_pending',
+    已付办理中: 'paid_processing',
+    已付已完成: 'paid_completed',
+
+    已取消: 'cancelled',
+    已送回: 'returned'
+  }
+
+  return map[status] || status
 }
+
+
+const mapColorToClass = (color?: string | null) => {
+  if (!color) return null
+
+  const map: Record<string, string> = {
+    yellow: 'row-yellow',
+    green: 'row-green',
+    cyan: 'row-cyan',
+    red: 'row-red',
+    gray: 'row-gray'
+  }
+
+  return map[color] || null
+}
+
+const tableRowClassName = ({
+  row,
+  rowIndex
+}: {
+  row: any
+  rowIndex: number
+}) => {
+  // 斑马纹
+  const baseClass = rowIndex % 2 === 0 ? 'even-row' : 'odd-row'
+  if (!row || !row.customer_id) return baseClass
+
+  // 同一客户的所有业务
+  const group = tableData.value.filter(
+    r => r.customer_id === row.customer_id
+  )
+
+  // 统一走系统状态值
+  const colors = new Set(
+    group.map(r =>
+      mapColorToClass(
+        getStatusColor(normalizeStatus(r.process_status))
+      )
+    )
+  )
+
+  let finalClass: string | null = null
+
+  // 同一客户业务状态一致 → 整块同色
+  if (colors.size === 1) {
+    finalClass = [...colors][0] || null
+  } else {
+    // 不一致 → 单行染色
+    finalClass = mapColorToClass(
+      getStatusColor(normalizeStatus(row.process_status))
+    )
+  }
+
+  if (!finalClass) return baseClass
+
+  return `${baseClass} ${finalClass}`
+}
+
 
 defineExpose({ tableRef })
 </script>
@@ -1078,10 +1201,21 @@ defineExpose({ tableRef })
 
 <style scoped>
 .table-wrapper {
-  height: 100%;
+flex: 1;           /* 🔥 必须 */
+  min-height: 0;    /* 🔥 必须 */
   display: flex;
   flex-direction: column;
 }
+:deep(.el-table) {
+  flex: 1;
+  min-height: 0;
+}
+
+:deep(.el-table__body-wrapper) {
+  flex: 1;
+  min-height: 0;
+}
+
 
 .action-buttons { 
   display: flex; 
@@ -1128,4 +1262,42 @@ defineExpose({ tableRef })
   text-align: center;
   white-space: nowrap;
 }
+:deep(.el-table__body-wrapper) {
+  max-height: calc(38px * 10); /* 38px = 你测到的一行高度 */
+  overflow-y: auto !important;
+}
+:deep(.el-table__body .row-yellow > td) {
+  background: #fef9c3 !important;
+}
+
+:deep(.el-table__body .row-green > td) {
+  background: #dcfce7 !important;
+}
+
+:deep(.el-table__body .row-cyan > td) {
+  background: #ecfeff !important;
+}
+
+:deep(.el-table__body .row-red > td) {
+  background: #fee2e2 !important;
+}
+
+:deep(.el-table__body .row-gray > td) {
+  background: #f1f5f9 !important;
+}
+
+/* =========================
+   固定列视觉分界线
+   ========================= */
+
+/* 右侧固定列整体容器 */
+:deep(.el-table__fixed-right) {
+  border-left: 3px solid #2563eb; /* 蓝色分界线（醒目、专业） */
+  box-shadow: -4px 0 8px rgba(37, 99, 235, 0.15);
+  z-index: 5;
+}
+
+
+
+
 </style>

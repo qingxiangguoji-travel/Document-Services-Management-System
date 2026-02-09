@@ -1,5 +1,5 @@
 <template>
-  <div class="fixed-summary" v-if="displayData.length > 0">
+  <div class="table-footer" v-if="displayData.length > 0">
     <div class="summary-row">
       <template v-for="col in visibleColumns" :key="col.key">
         <div 
@@ -16,6 +16,7 @@
   </div>
 </template>
 
+
 <script setup lang="ts">
 import { computed, PropType } from 'vue'
 import type { ColumnDefinition, TableRow } from '../types/table'
@@ -30,7 +31,7 @@ const props = defineProps<Props>()
 </script>
 
 <style scoped>
-.fixed-summary {
+.table-footer {
   flex-shrink: 0;
   background: #f8fafc;
   border-top: 2px solid #dc2626;

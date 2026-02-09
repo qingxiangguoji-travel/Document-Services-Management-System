@@ -1,15 +1,42 @@
-<!-- resources/js/pages/Business/Orders.vue -->
 <template>
-  <PageLayout>
+  <TablePageLayout>
+    <!-- ================= 标题 ================= -->
     <template #title>业务订单管理</template>
     <template #subtitle>管理公司所有业务办理进度及财务结算状态</template>
+
     <template #actions>
-      <el-button type="success" :icon="Download" plain @click="handleExport">导出汇总数据</el-button>
-      <el-button type="primary" size="large" :icon="Plus" @click="goCreate" class="btn-emphasize">
+      <el-button
+        type="success"
+        :icon="Download"
+        plain
+        @click="handleExport"
+      >
+        导出汇总数据
+      </el-button>
+
+      <el-button
+        v-if="canEditOrder"
+        type="primary"
+        size="large"
+        :icon="Plus"
+        class="btn-emphasize"
+        @click="goCreate"
+      >
         创建新订单
+      </el-button>
+
+      <el-button
+        v-if="canDeleteOrder"
+        type="danger"
+        plain
+        :icon="Delete"
+        @click="openSmartDelete"
+      >
+        智能批量删除
       </el-button>
     </template>
 
+    <!-- ================= 批量工具条 ================= -->
     <transition name="el-zoom-in-bottom">
       <div v-if="selectedOrderRows.length > 0" class="batch-toolbar">
         <span class="selected-count">已选 {{ selectedOrderRows.length }} 项</span>
@@ -20,92 +47,113 @@
       </div>
     </transition>
 
-    <!-- 搜索区 -->
-    <el-card shadow="never" class="section-card search-card no-print">
-      <el-form :model="filters" label-width="80px">
-        <el-row :gutter="20">
-          <el-col :span="6">
-            <el-form-item label="订单编号">
-              <el-input v-model="filters.orderCode" placeholder="输入单号搜索" clearable />
-            </el-form-item>
-          </el-col>
-          <el-col :span="6">
-            <el-form-item label="代理人">
-              <el-select v-model="filters.agent" placeholder="请选择代理公司 - 联系人" filterable clearable class="w-100">
-                <el-option
-                  v-for="a in agentOptions"
-                  :key="a.unique_key"
-                  :label="a.display_label"
-                  :value="a.display_label"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="6">
-            <el-form-item label="客户姓名">
-              <el-input v-model="filters.customerName" placeholder="输入客户名切换明细模式" clearable />
-            </el-form-item>
-          </el-col>
-          <el-col :span="6" class="flex-end">
-            <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
-            <el-button :icon="Refresh" @click="resetFilters">重置</el-button>
-            <el-button link @click="isExpand = !isExpand">
-              {{ isExpand ? '收起' : '高级' }}
-              <el-icon>
-                <ArrowDown v-if="!isExpand" />
-                <ArrowUp v-else />
-              </el-icon>
-            </el-button>
-          </el-col>
-        </el-row>
-
-        <el-collapse-transition>
-          <div v-show="isExpand" class="advanced-box">
-            <el-divider border-style="dashed" />
-            <el-row :gutter="20">
-              <el-col :span="6">
-                <el-form-item label="业务类型">
-                  <el-select v-model="filters.businessType" placeholder="全部类型" clearable class="w-100">
-                    <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="创建日期">
-                  <el-date-picker
-                    v-model="filters.dateRange"
-                    type="daterange"
-                    range-separator="至"
-                    start-placeholder="开始日期"
-                    end-placeholder="结束日期"
-                    value-format="YYYY-MM-DD"
-                    unlink-panels
-                    :shortcuts="dateShortcuts"
+    <!-- ================= 搜索区 ================= -->
+    <template #search>
+      <el-card shadow="never" class="section-card search-card no-print">
+        <el-form :model="filters" label-width="80px">
+          <el-row :gutter="20">
+            <el-col :span="4">
+              <el-form-item label="订单编号">
+                <el-input v-model="filters.orderCode" style="width:100%" placeholder="输入单号搜索" clearable />
+              </el-form-item>
+            </el-col>
+            
+            <el-col v-if="!isAgent" :span="4">
+              <el-form-item label="代理公司">
+                <el-select v-model="filters.agentCompanyId" style="width:100%" placeholder="请选择或输入" filterable clearable>
+                  <el-option
+                    v-for="a in agentCompanies"
+                    :key="a.id"
+                    :label="a.name"
+                    :value="a.id"
                   />
-                </el-form-item>
-              </el-col>
-              <el-col :span="5">
-                <el-form-item label="办理部门">
-                  <el-select v-model="filters.dept" placeholder="选择部门" clearable class="w-100">
-                    <el-option v-for="d in deptOptions" :key="d.id" :label="d.name" :value="d.id" />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-              <el-col :span="5">
-                <el-form-item label="国籍筛选">
-                  <el-select v-model="filters.nationality" clearable class="w-100">
-                    <el-option v-for="n in nationalityOptions" :key="n" :label="n" :value="n" />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-            </el-row>
-          </div>
-        </el-collapse-transition>
-      </el-form>
-    </el-card>
+                </el-select>
+              </el-form-item>
+            </el-col>
+            
+            <el-col v-if="!isAgent" :span="4">
+              <el-form-item label="代理人">
+<el-select v-model="filters.agentContactId" style="width:100%" placeholder="请选择或输入" filterable clearable>
+  <el-option
+    v-for="c in agentContactOptions"
+    :key="c.id"
+    :label="`${c.company_name} - ${c.name}`"
+    :value="c.id"
+  />
+</el-select>
+              </el-form-item>
+            </el-col>
 
-    <!-- 表格 -->
-    <el-card shadow="never" class="section-card table-card print-area">
+            <el-col :span="4">
+              <el-form-item label="客户姓名">
+                <el-input v-model="filters.customerName" style="width:100%" placeholder="搜索客户" clearable />
+              </el-form-item>
+            </el-col>
+
+            <el-col :span="6" class="flex-end">
+              <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
+              <el-button :icon="Refresh" @click="resetFilters">重置</el-button>
+              <el-button link @click="isExpand = !isExpand">
+                {{ isExpand ? '收起' : '高级' }}
+                <el-icon>
+                  <ArrowDown v-if="!isExpand" />
+                  <ArrowUp v-else />
+                </el-icon>
+              </el-button>
+            </el-col>
+          </el-row>
+
+          <el-collapse-transition>
+            <div v-show="isExpand" class="advanced-box">
+              <el-divider border-style="dashed" />
+              <el-row :gutter="20">
+                <el-col :span="6">
+                  <el-form-item label="业务类型">
+                    <el-select v-model="filters.businessType" placeholder="全部类型" clearable class="w-100">
+                      <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+
+                <el-col :span="8">
+                  <el-form-item label="创建日期">
+                    <el-date-picker
+                      v-model="filters.dateRange"
+                      type="daterange"
+                      range-separator="至"
+                      start-placeholder="开始日期"
+                      end-placeholder="结束日期"
+                      value-format="YYYY-MM-DD"
+                      unlink-panels
+                      :shortcuts="dateShortcuts"
+                    />
+                  </el-form-item>
+                </el-col>
+
+                <el-col :span="5">
+                  <el-form-item label="办理部门">
+                    <el-select v-model="filters.dept" placeholder="选择部门" clearable class="w-100">
+                      <el-option v-for="d in deptOptions" :key="d.id" :label="d.name" :value="d.id" />
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+
+                <el-col :span="5">
+                  <el-form-item label="国籍筛选">
+                    <el-select v-model="filters.nationality" clearable class="w-100">
+                      <el-option v-for="n in nationalityOptions" :key="n" :label="n" :value="n" />
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </div>
+          </el-collapse-transition>
+        </el-form>
+      </el-card>
+    </template>
+
+    <!-- ================= 表格区 ================= -->
+    <template #table>
       <el-table
         ref="multipleTableRef"
         :data="tableRows"
@@ -113,6 +161,7 @@
         border
         stripe
         class="order-tree-table"
+        highlight-current-row
         :row-class-name="rowClassName"
         @selection-change="handleSelectionChange"
       >
@@ -136,9 +185,11 @@
                   <span class="code-font">{{ scope.row.code || scope.row.order_no || '-' }}</span>，
                 </span>
 
-                <strong class="agent-strong">
-                  {{ [scope.row.agent_company, scope.row.agent_contact].filter(Boolean).join(' - ') }}
-                </strong>
+<strong class="agent-strong">
+  {{ [scope.row.agent_company_name || scope.row.agent_company, scope.row.agent_contact_name || scope.row.agent_contact]
+      .filter(Boolean).join(' - ') }}
+</strong>
+
 
                 <span class="summary-text">
                   业务：{{ scope.row.created_at }} 共 {{ scope.row.__customersCount }} 本护照，
@@ -147,7 +198,8 @@
               </div>
 
               <div v-if="isCustomerView && scope.row.__customerHit" class="customer-hit-hint">
-                当前查询客户：<strong>{{ scope.row.__customerHit.name }}</strong>
+                当前查询客户：
+                <strong>{{ scope.row.__customerHit.name }}</strong>
                 <span v-if="scope.row.__customerHit.passport">
                   ({{ scope.row.__customerHit.passport }})
                 </span>
@@ -170,7 +222,12 @@
             </div>
 
             <!-- 子行 -->
-            <div v-else class="biz-row-grid">
+            <div
+              v-else
+              class="biz-row-grid"
+              :data-order="scope.row.__orderId"
+              :data-status="scope.row.__processStatus"
+            >
               <div class="biz-cell-no">{{ scope.row.__rowNoDisplay || '' }}</div>
               <div class="biz-cell-name">{{ scope.row.name || '-' }}</div>
               <div class="biz-cell">{{ scope.row.passport || '-' }}</div>
@@ -200,17 +257,19 @@
         <!-- ================= 办理进度 ================= -->
         <el-table-column label="办理进度" width="160" align="center">
           <template #default="scope">
-            <div
-              v-if="scope.row.__rowType === 'order'"
-              class="status-detail-tag"
-              :class="`status-type-${scope.row.__statusInfo.type}`"
-            >
-              <div v-for="(line, idx) in scope.row.__statusInfo.lines" :key="idx" class="status-line">
-                <span class="dot"></span> {{ line }}
+            <div v-if="scope.row.__rowType === 'order'" class="status-detail-tag">
+              <div
+                v-for="(item, idx) in scope.row.__statusInfo.items"
+                :key="idx"
+                class="status-line status-clickable"
+                :class="`status-line-${getStatusColor(item.code) || 'gray'}`"
+                @click.stop="focusStatus(scope.row.__orderId, item.code)"
+              >
+                <span class="dot"></span>
+                {{ item.count }}人 {{ item.label }}
               </div>
             </div>
 
-            <!-- ✅ PATCH：子表头标题 -->
             <div v-else-if="scope.row.__rowType === 'subhead'" class="subhead-right">
               办理进度
             </div>
@@ -224,13 +283,9 @@
         </el-table-column>
 
         <!-- ================= 金额 ================= -->
-        <el-table-column label="金额 (USD)" width="140" align="center">
+        <el-table-column v-if="canViewFinance" label="金额 (USD)" width="140" align="center">
           <template #default="scope">
-            <!-- ✅ PATCH：子表头显示父层汇总 -->
-            <span
-              v-if="scope.row.__rowType === 'subhead'"
-              class="subhead-right subhead-amount"
-            >
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right subhead-amount">
               合计金额：
               <b class="amount-sum">
                 ${{ formatAmount(scope.row.__parent?.__finance?.amount || 0) }}
@@ -244,12 +299,9 @@
         </el-table-column>
 
         <!-- ================= 上游费用 ================= -->
-        <el-table-column label="上游费用" width="100" align="center">
+        <el-table-column v-if="canViewFinance" label="上游费用" width="100" align="center">
           <template #default="scope">
-            <!-- ✅ PATCH -->
-            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">
-              上游费用
-            </span>
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">上游费用</span>
             <span v-else>
               ${{ Number(scope.row.__finance?.upstream_fee || 0).toLocaleString() }}
             </span>
@@ -257,12 +309,9 @@
         </el-table-column>
 
         <!-- ================= 代理佣金 ================= -->
-        <el-table-column label="代理佣金" width="110" align="center">
+        <el-table-column v-if="canViewFinance" label="代理佣金" width="110" align="center">
           <template #default="scope">
-            <!-- ✅ PATCH -->
-            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">
-              代理佣金
-            </span>
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">代理佣金</span>
 
             <template v-else-if="scope.row.__rowType === 'biz'">
               <el-input-number
@@ -282,12 +331,9 @@
         </el-table-column>
 
         <!-- ================= 客服提成 ================= -->
-        <el-table-column label="客服提成" width="110" align="center">
+        <el-table-column v-if="canViewFinance" label="客服提成" width="110" align="center">
           <template #default="scope">
-            <!-- ✅ PATCH -->
-            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">
-              客服提成
-            </span>
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">客服提成</span>
 
             <template v-else-if="scope.row.__rowType === 'biz'">
               <el-input-number
@@ -307,12 +353,9 @@
         </el-table-column>
 
         <!-- ================= 利润 ================= -->
-        <el-table-column label="利润" width="110" align="center">
+        <el-table-column v-if="canViewFinance" label="利润" width="110" align="center">
           <template #default="scope">
-            <!-- ✅ PATCH -->
-            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">
-              利润
-            </span>
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">利润</span>
 
             <span
               v-else
@@ -327,15 +370,15 @@
         </el-table-column>
 
         <!-- ================= 结算 ================= -->
-        <el-table-column label="结算" width="110" align="center">
+        <el-table-column v-if="canViewFinance" label="结算" width="110" align="center">
           <template #default="scope">
-            <!-- ✅ PATCH -->
-            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">
-              结算
-            </span>
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">结算</span>
 
             <template v-else-if="scope.row.__rowType === 'order'">
-              <el-dropdown trigger="click" @command="(cmd) => handleUpdateSettlement(scope.row.__orderId, cmd)">
+              <el-dropdown
+                trigger="click"
+                @command="(cmd) => handleUpdateSettlement(scope.row.__orderId, cmd)"
+              >
                 <el-tag
                   :type="
                     scope.row.__settlement === 'paid'
@@ -350,6 +393,7 @@
                   {{ settlementText(scope.row.__settlement) }}
                   <el-icon><ArrowDown /></el-icon>
                 </el-tag>
+
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="paid">标记为已结清</el-dropdown-item>
@@ -370,21 +414,14 @@
         <!-- ================= 备注 ================= -->
         <el-table-column label="备注" width="140">
           <template #default="scope">
-            <!-- ✅ PATCH -->
-            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">
-              备注
-            </span>
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">备注</span>
 
             <template v-else-if="scope.row.__rowType === 'biz'">
               <el-input
                 v-model="scope.row.remark"
                 size="small"
                 placeholder="业务备注"
-                @blur="() =>
-                  saveBizRowPatch(scope.row.__orderId, scope.row.__rowIndex, {
-                    remark: scope.row.remark
-                  })
-                "
+                @blur="() => saveBizRowPatch(scope.row.__orderId, scope.row.__rowIndex, { remark: scope.row.remark })"
               />
             </template>
 
@@ -402,20 +439,24 @@
         <!-- ================= 操作 ================= -->
         <el-table-column label="操作" width="160" fixed="right" align="center" class-name="no-print">
           <template #default="scope">
-            <!-- ✅ PATCH -->
-            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">
-              操作
-            </span>
+            <span v-if="scope.row.__rowType === 'subhead'" class="subhead-right">操作</span>
 
             <template v-else-if="scope.row.__rowType === 'order'">
-              <el-button link type="primary" @click="goEdit(scope.row.__orderId)">编辑</el-button>
-              <el-dropdown trigger="click" @command="(cmd) => handleCommand(cmd, scope.row.__orderId)">
-                <el-button link type="primary" style="margin-left: 12px">更多</el-button>
+              <el-button v-if="canEditOrder" link type="primary" @click="goEdit(scope.row.__orderId)">编辑</el-button>
+
+              <el-dropdown
+                trigger="click"
+                @command="(cmd) => handleCommand(cmd, scope.row.__orderId)"
+              >
+                <el-button link type="primary" style="margin-left: 12px">
+                  更多
+                </el-button>
+
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="print" icon="Printer">打印此单</el-dropdown-item>
-                    <el-dropdown-item command="export" icon="Download">导出此单</el-dropdown-item>
-                    <el-dropdown-item command="delete" icon="Delete" divided style="color: #f56c6c">
+                    <el-dropdown-item command="print">打印此单</el-dropdown-item>
+                    <el-dropdown-item command="export">导出此单</el-dropdown-item>
+                    <el-dropdown-item v-if="canDeleteOrder" command="delete" divided style="color:#f56c6c">
                       删除订单
                     </el-dropdown-item>
                   </el-dropdown-menu>
@@ -425,31 +466,157 @@
           </template>
         </el-table-column>
       </el-table>
+    </template>
 
-      <div class="pagination-area no-print" style="margin-top: 20px; display: flex; justify-content: flex-end">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          :total="filteredOrders.length"
+    <!-- ================= 分页 ================= -->
+    <template #pagination>
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        layout="total, sizes, prev, pager, next"
+        :total="filteredOrders.length"
+      />
+    </template>
+  </TablePageLayout>
+  
+  <el-dialog
+    v-model="smartDeleteVisible"
+    title="智能批量删除订单"
+    width="520px"
+  >
+    <el-form :model="smartDeleteRule" label-width="110px">
+      <el-form-item label="时间规则">
+        <el-select v-model="smartDeleteRule.range" class="w-100">
+          <el-option label="今天之前的订单" value="history" />
+          <el-option label="超过指定天数" value="days" />
+          <el-option label="自定义时间范围" value="custom" />
+        </el-select>
+      </el-form-item>
+
+      <el-form-item
+        v-if="smartDeleteRule.range === 'days'"
+        label="超过天数"
+      >
+        <el-input-number
+          v-model="smartDeleteRule.days"
+          :min="1"
+          :max="3650"
+          class="w-100"
         />
-      </div>
-    </el-card>
-  </PageLayout>
+      </el-form-item>
+
+      <el-form-item
+        v-if="smartDeleteRule.range === 'custom'"
+        label="选择日期"
+      >
+        <el-date-picker
+          v-model="smartDeleteRule.dateRange"
+          type="daterange"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          class="w-100"
+        />
+      </el-form-item>
+
+      <el-form-item label="办理状态">
+        <el-select v-model="smartDeleteRule.status" class="w-100" clearable>
+          <el-option label="已完成" value="completed" />
+          <el-option label="已取消" value="cancelled" />
+          <el-option label="已送回" value="returned" />
+        </el-select>
+      </el-form-item>
+
+      <el-form-item label="结算状态">
+        <el-select v-model="smartDeleteRule.settlement" class="w-100" clearable>
+          <el-option label="已结算" value="paid" />
+          <el-option label="未结算" value="unpaid" />
+        </el-select>
+      </el-form-item>
+
+      <el-alert
+        type="warning"
+        show-icon
+        :closable="false"
+        style="margin-top: 10px"
+      >
+        命中的订单将进入回收站，可恢复。此操作会记录操作人和原因。
+      </el-alert>
+    </el-form>
+
+    <template #footer>
+      <el-button @click="smartDeleteVisible = false">取消</el-button>
+      <el-button type="danger" @click="previewSmartDelete">
+        预览命中订单
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { applyDashboardQueryToOrdersFilters } from '@/utils/businessViewAdapter'
+import { softDelete } from '@/domain/recycleService'
+import { getRestoreTarget, clearRestoreTarget } from '@/utils/restoreNavigator'
+import TablePageLayout from '@/layouts/TablePageLayout.vue'
+import { getStatusGroup, getStatusColor, getStatusDef } from '@/domain/orderStatus'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Plus, Search, Refresh, ArrowDown, ArrowUp, ArrowRight, Download, Printer, Delete, Check } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import PageLayout from '@/layouts/PageLayout.vue'
 import { db } from '@/utils/storage'
+import { auth } from '@/utils/auth'
 import { normalizeOrderForView } from '@/utils/orderAdapter'
 import { calcRowFinance, calcOrderFinance } from '@/utils/finance'
+import { ORDER_STATUSES } from '@/domain/orderStatus'
+import { listenSystemEvent } from '@/utils/systemBus'
+
+
+let stopListen = null
+
+// ⭐代理公司列表（必须用响应式）
+const agentCompanies = computed(() => db.getAgents() || [])
+
+const agentContactOptions = computed(() => {
+  const agents = db.getAgents() || []
+  const opts = []
+
+  agents.forEach(company => {
+    ;(company.contacts || []).forEach(con => {
+      opts.push({
+        id: `${company.id}_${con.name}`,
+        name: con.name,
+        company_id: company.id,
+        company_name: company.name
+      })
+    })
+  })
+
+  return opts
+})
+
+
 
 const router = useRouter()
+// ⭐ 当前登录用户（多租户核心）
+const currentUser = auth.getUser()
+
+// ===============================
+// 企业级权限模型
+// ===============================
+const isAdmin = currentUser?.role === 'admin'
+const isStaff = currentUser?.role === 'staff'
+const isAgent = currentUser?.role === 'agent'
+
+// 财务权限（只有内部员工）
+const canViewFinance = isAdmin || isStaff
+
+// 编辑权限（只有内部员工）
+const canEditOrder = isAdmin || isStaff
+
+// 删除权限（只有管理员）
+const canDeleteOrder = isAdmin
+
 const route = useRoute()
 
 const loading = ref(false)
@@ -463,12 +630,115 @@ const configs = db.getConfigs()
 const currentPage = ref(1)
 const pageSize = ref(10)
 
+const highlightStatus = ref('')
 const expandedOrderIds = ref(new Set())
 
 const typeOptions = ref(configs.businessTypes || [])
 const nationalityOptions = ref(configs.nationalities || [])
 const deptOptions = ref(configs.departments || [])
 const statusOptions = ref(configs.orderStatuses || [])
+
+const smartDeleteVisible = ref(false)
+
+const smartDeleteRule = reactive({
+  range: 'history',   // history | days | custom
+  days: 30,          // 天数模式用
+  dateRange: [],    // 自定义时间段用 [start, end]
+  status: '',
+  settlement: ''
+})
+
+const openSmartDelete = () => {
+  smartDeleteVisible.value = true
+}
+
+const previewSmartDelete = () => {
+  const raw = db.getRaw('ORDERS') || []
+  const today = new Date()
+
+  const hit = raw.filter(o => {
+    if (o.deleted) return false
+
+    const d = new Date(normalizeDate(o))
+    const days = (today - d) / (1000 * 60 * 60 * 24)
+
+    // ================= 时间规则引擎 =================
+    if (smartDeleteRule.range === 'history') {
+      if (!(d < today)) return false
+    }
+
+    // 超过 N 天
+    if (smartDeleteRule.range === 'days') {
+      if (days < Number(smartDeleteRule.days || 0)) return false
+    }
+
+    // 自定义区间
+    if (smartDeleteRule.range === 'custom') {
+      const [start, end] = smartDeleteRule.dateRange || []
+      if (!start || !end) return false
+      if (!(d >= new Date(start) && d <= new Date(end))) return false
+    }
+
+    // 状态规则
+    if (smartDeleteRule.status) {
+      const has = (o.customers || []).some(c =>
+        getStatusGroup(normalizeProcessStatus(c)) === smartDeleteRule.status
+      )
+      if (!has) return false
+    }
+
+    // 结算规则
+    if (smartDeleteRule.settlement) {
+      const s = getDisplaySettlement(o.customers || [])
+      if (s !== smartDeleteRule.settlement) return false
+    }
+
+    return true
+  })
+
+  if (!hit.length) {
+    ElMessage.warning('没有匹配的订单')
+    return
+  }
+
+  ElMessageBox.confirm(
+    `本次将移入回收站 ${hit.length} 个订单，是否继续？`,
+    '批量删除预览',
+    { type: 'warning' }
+  ).then(() => {
+    doSmartDelete(hit)
+  })
+}
+
+const doSmartDelete = (orders) => {
+  try {
+    orders.forEach(order => {
+      const snapshot = JSON.parse(JSON.stringify(order))
+
+      softDelete({
+        module: 'order',
+        sourceId: String(order.id),
+        snapshot,
+        operator: '管理员',
+        reason: '智能批量删除'
+      })
+      // ✅ 同步打标原订单
+      const raw = db.getRaw('ORDERS') || []
+      const idx = raw.findIndex(o => o.id === order.id)
+      if (idx !== -1) {
+        raw[idx].deleted = true
+        db.saveRaw('ORDERS', raw)
+      }
+    })
+
+    smartDeleteVisible.value = false
+    loadData()
+    ElMessage.success(`已移入回收站 ${orders.length} 个订单`)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('批量删除失败')
+  }
+}
 
 // ✅ PATCH：金额格式化方法（子表头合计用）
 // ====================
@@ -479,8 +749,9 @@ const formatAmount = (v) => {
     maximumFractionDigits: 0
   })
 }
+
 const handleUpdateOrderRemark = (orderId, remark) => {
-  const raw = db.getRaw('ORDERS') || []
+  const raw = (db.getRaw('ORDERS') || []).filter(o => !o.deleted)
   const idx = raw.findIndex(o => o.id === orderId)
   if (idx === -1) return
   raw[idx].remark = remark
@@ -488,7 +759,74 @@ const handleUpdateOrderRemark = (orderId, remark) => {
   loadData()
 }
 
+const focusStatus = async (orderId, statusCode) => {
+  // 1. 强制展开订单
+  expandedOrderIds.value.add(orderId)
 
+  await nextTick()
+
+  // 2. 找对应子行
+  const rows = document.querySelectorAll(
+    `.biz-row-grid[data-order="${orderId}"][data-status="${statusCode}"]`
+  )
+
+  if (!rows.length) return
+
+  // 3. 滚动到第一行
+  rows[0].scrollIntoView({
+    behavior: 'smooth',
+    block: 'center'
+  })
+
+  // 4. 高亮
+  rows.forEach(r => r.classList.add('row-highlight'))
+
+  setTimeout(() => {
+    rows.forEach(r => r.classList.remove('row-highlight'))
+  }, 2000)
+}
+
+const bizRowClassByStatus = (row) => {
+  const color = getStatusColor(row.__processStatus)
+  if (!color) return ''
+  return `biz-status-${color}`
+}
+
+const normalizeStatusLabel = (code) => {
+  const def = getStatusDef(code)
+  return def?.label || '未知状态'
+}
+
+const STATUS_GROUP_TO_UI = {
+  created: 'yellow',
+  unpaid: 'cyan',
+  paid: 'green',
+  cancelled: 'red',
+  returned: 'gray',
+  other: 'info'
+}
+
+const aggregateBizStatus = (bizRows = []) => {
+  const map = {
+    yellow: [],
+    cyan: [],
+    green: [],
+    red: [],
+    gray: []
+  }
+
+  bizRows.forEach(r => {
+    const code = r.__processStatus
+    const color = getStatusColor(code)
+    const def = getStatusDef(code)
+
+    if (!color || !def) return
+
+    map[color].push(def.label)
+  })
+
+  return map
+}
 
 const fmt = (d) => d.toISOString().slice(0, 10)
 
@@ -553,7 +891,7 @@ const dateShortcuts = [
       return [fmt(start), fmt(end)]
     }
   },
-    {
+  {
     text: '近6个月',
     value: () => {
       const end = new Date()
@@ -579,19 +917,19 @@ const dateShortcuts = [
       return [fmt(start), fmt(end)]
     }
   }
-
 ]
-
-
 
 const filters = reactive({
   orderCode: '',
-  agent: '',
+  agentContactId: '',
+  agentCompanyId: '',
   businessType: '',
   dateRange: [],
+  before: '',           // ✅ 新增
   dept: '',
   customerName: '',
-  nationality: ''
+  nationality: '',
+  __processStatus: ''   // ✅ 必须声明
 })
 
 const isCustomerView = computed(() => !!(filters.customerName || '').trim())
@@ -618,6 +956,22 @@ const agentOptions = computed(() => {
 })
 
 /** ===== helpers：字段兼容 ===== */
+const normalizeStatusCode = (rawStatus) => {
+  if (!rawStatus) return null
+
+  // 已经是系统码
+  const hit = ORDER_STATUSES.find(s => s.value === rawStatus)
+  if (hit) return hit.value
+
+  // 用 label 反查
+  const byLabel = ORDER_STATUSES.find(
+    s => s.label === rawStatus || s.label === String(rawStatus).trim()
+  )
+  if (byLabel) return byLabel.value
+
+  return null
+}
+
 const normalizeBizType = (row) => row.businessType || row.business_type || row.biz_type || row.type || ''
 const normalizeProcessStatus = (row) => row.process_status || row.status || row.processStatus || 'Pending'
 const normalizeRowSettlement = (row) => {
@@ -631,7 +985,10 @@ const normalizeDept = (order) =>
 const normalizeDate = (order) => order.created_at || order.date || ''
 const normalizeOrderCode = (order) => order.code || order.order_no || ''
 const normalizeAgentLabel = (order) =>
-  [order.agent_company, order.agent_contact].filter(Boolean).join(' - ')
+  [order.agent_company_name, order.agent_contact_name]
+    .filter(Boolean)
+    .join(' - ')
+
   
 const countUniqueCustomers = (rows = []) => {
   const set = new Set()
@@ -640,7 +997,6 @@ const countUniqueCustomers = (rows = []) => {
   })
   return set.size
 }
-
 
 /** ✅ 序号：优先新建页字段，否则 fallback */
 const normalizeRowNo = (row, idx) => {
@@ -658,7 +1014,6 @@ const normalizeRowNo = (row, idx) => {
   return idx + 1
 }
 
-
 /** ✅ 签证到期日：多字段兼容 */
 const normalizeVisaExpireAt = (row) =>
   row.visa_expiry ??          // 新建页标准字段
@@ -670,39 +1025,72 @@ const normalizeVisaExpireAt = (row) =>
   row.visa_expiry_date ??
   ''
 
-const statusTag = (s) => statusOptions.value.find(o => o.value === s || o.label === s)?.color || 'info'
-const statusText = (s) => statusOptions.value.find(o => o.value === s || o.label === s)?.label || s
 const settlementText = (s) => ({ paid: '已结清', partial: '部分结算', unpaid: '未结算' }[s] || '未知')
+
+const statusText = (code) => {
+  const def = getStatusDef(code)
+  return def?.label || code || '-'
+}
+
+const statusTag = (code) => {
+  const color = getStatusColor(code)
+  return (
+    color === 'green' ? 'success' :
+    color === 'yellow' ? 'warning' :
+    color === 'red' ? 'danger' :
+    color === 'cyan' ? 'info' :
+    'info'
+  )
+}
 
 /** 父行统计 */
 const getDisplayStatusInfo = (bizRows) => {
-  if (!bizRows || bizRows.length === 0) return { lines: ['无数据'], type: 'info' }
-  const total = bizRows.length
+  if (!Array.isArray(bizRows) || bizRows.length === 0) {
+    return {
+      items: [],
+      lines: ['无业务'],
+      type: 'info'
+    }
+  }
 
-  const completedCount = bizRows.filter(r => {
-    const s = r.__processStatus
-    const sObj = statusOptions.value.find(o => o.value === s || o.label === s)
-    const label = sObj?.label || s
-    return label === '已完成' || s === 'Completed' || s === '已完成'
-  }).length
+  const counter = new Map()
+  const groupCounter = new Map()
 
-  const pendingCount = bizRows.filter(r => {
-    const s = r.__processStatus
-    const sObj = statusOptions.value.find(o => o.value === s || o.label === s)
-    const label = sObj?.label || s
-    return label === '未办理' || s === 'Pending' || s === '未办理'
-  }).length
+  bizRows.forEach(r => {
+    const def = getStatusDef(r.__processStatus)
+    if (!def) return
 
-  const processingCount = total - completedCount - pendingCount
+    const key = def.value
+    counter.set(key, (counter.get(key) || 0) + 1)
 
-  if (completedCount === total) return { lines: ['全部已完成'], type: 'success' }
-  if (pendingCount === total) return { lines: ['全部未办理'], type: 'info' }
+    const group = def.group || 'other'
+    groupCounter.set(group, (groupCounter.get(group) || 0) + 1)
+  })
 
-  const lines = []
-  if (pendingCount > 0) lines.push(`${pendingCount} 人未办理`)
-  if (processingCount > 0) lines.push(`${processingCount} 人办理中`)
-  if (completedCount > 0) lines.push(`${completedCount} 人已完成`)
-  return { lines, type: 'warning' }
+  // 主色
+  let dominantGroup = 'other'
+  let max = 0
+  groupCounter.forEach((count, group) => {
+    if (count > max) {
+      max = count
+      dominantGroup = group
+    }
+  })
+
+  const items = Array.from(counter.entries()).map(([code, count]) => {
+    const def = getStatusDef(code)
+    return {
+      code,
+      label: def?.label || code,
+      count
+    }
+  })
+
+  return {
+    items,
+    lines: items.map(i => `${i.count}人 ${i.label}`),
+    type: STATUS_GROUP_TO_UI[dominantGroup] || 'info'
+  }
 }
 
 const getDisplaySettlement = (bizRows) => {
@@ -714,18 +1102,17 @@ const getDisplaySettlement = (bizRows) => {
 }
 
 const getBizStats = (customers) => {
-  const map = {}
+  const map = new Map()
+
   ;(customers || []).forEach(c => {
     const type = normalizeBizType(c) || '未知业务'
-    if (!map[type]) map[type] = new Set()
-    if (c.customer_id) map[type].add(c.customer_id)
+    map.set(type, (map.get(type) || 0) + 1)
   })
 
-  return Object.entries(map)
-    .map(([name, set]) => `${set.size}本${name}`)
+  return Array.from(map.entries())
+    .map(([name, count]) => `${count}本${name}`)
     .join('，')
 }
-
 
 /** 子行费用明细：只显示有数据的项 */
 const buildFeeLines = (row) => {
@@ -750,11 +1137,106 @@ const buildFeeLines = (row) => {
 /** 数据加载 */
 const loadData = () => {
   loading.value = true
-  const raw = db.getRaw('ORDERS') || []
-  allOrders.value = raw
-    .filter(o => !o.deleted)
-    .map(o => normalizeOrderForView(o))
+
+  let raw = db.getRaw('ORDERS') || []
+
+  // ================= DEBUG START =================
+  console.log('========== 代理权限调试 ==========')
+  console.log('当前登录用户：', currentUser)
+  console.log('系统全部订单数量：', raw.length)
+
+  if (raw.length) {
+    console.log('前3条订单的 agent_company_id：',
+      raw.slice(0,3).map(o => ({
+        orderNo: o.code,
+        agent_company: o.agent_company,
+        agent_company_id: o.agent_company_id
+      }))
+    )
+  }
+
+  if (currentUser?.role === 'agent') {
+    console.log('当前代理绑定公司ID：', currentUser.agent_company_id)
+  }
+  // ================= DEBUG END =================
+
+  // ✅ 1) 列表永远不显示已删除（回收站）订单
+  raw = raw.filter(o => !o.deleted)
+
+  // ============================================
+  // ⭐ 代理权限：只能看自己接单的订单（最终版）
+  // ============================================
+  // ============================================
+  // ⭐ 企业正式版：代理只看自己的订单（按联系人ID）
+  // ============================================
+// ⭐ 正确：按代理联系人ID过滤
+if (currentUser?.role === 'agent' && currentUser.agent_contact_id) {
+  raw = raw.filter(order =>
+    String(order.agent_contact_id) ===
+    String(currentUser.agent_contact_id)
+  )
+}
+
+
+
+  // ✅ 3) 排序逻辑（保持你原来的）
+  const sorted = [...raw].sort((a, b) => {
+    const na = String(a.code || a.order_no || '')
+    const nb = String(b.code || b.order_no || '')
+    if (!na && !nb) return 0
+    if (!na) return 1
+    if (!nb) return -1
+    return nb.localeCompare(na)
+  })
+
+  allOrders.value = sorted.map(o => normalizeOrderForView(o))
   loading.value = false
+}
+
+const handleRestoreJump = async () => {
+  // ⭐ 同时支持两种来源
+  const urlId = route.query.restore || route.query.highlight
+  const navTarget = getRestoreTarget()?.id
+
+  const target = String(urlId || navTarget || '').trim()
+  if (!target) return
+
+  // ⭐先重新加载订单
+  loadData()
+  await nextTick()
+
+  // ⭐找到订单（支持 id / code）
+  const order = allOrders.value.find(o => {
+    const id = String(o.id || '')
+    const code = String(o.code || o.order_no || '')
+    return id === target || code === target
+  })
+
+  if (!order) return
+
+  // ⭐展开订单
+  expandedOrderIds.value.add(order.id)
+  await nextTick()
+
+  // ⭐滚动定位
+  const row = document.querySelector(
+    `.biz-row-grid[data-order="${order.id}"]`
+  )
+
+  if (row) {
+    row.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center'
+    })
+
+    // ⭐高亮动画
+    row.classList.add('row-highlight')
+    setTimeout(() => row.classList.remove('row-highlight'), 2500)
+  }
+
+  // ⭐关键：最后才清空 query
+  clearRestoreTarget()
+  router.replace({ query: {} })
 }
 
 /** 过滤后的订单 */
@@ -766,13 +1248,27 @@ const filteredOrders = computed(() => {
   return source.filter(order => {
     const code = normalizeOrderCode(order)
     const matchCode = !kwCode || (code || '').toLowerCase().includes(kwCode)
-    const matchAgent = !filters.agent || normalizeAgentLabel(order) === filters.agent
+const matchContact =
+  !filters.agentContactId ||
+  String(order.agent_contact_id) === String(filters.agentContactId)
+
+    const matchCompany =
+      !filters.agentCompanyId ||
+      String(order.agent_company_id) === String(filters.agentCompanyId)
 
     let matchDate = true
-    if (filters.dateRange && filters.dateRange.length === 2) {
-      const d = normalizeDate(order)
-      matchDate = d >= filters.dateRange[0] && d <= filters.dateRange[1]
+    const d = normalizeDate(order)
+
+    // 来自 Dashboard 的"历史"
+    if (filters.before) {
+      matchDate = d && d < filters.before
     }
+
+    // 普通日期范围
+else if (filters.dateRange && filters.dateRange.length === 2) {
+  matchDate = d && d >= filters.dateRange[0] && d <= filters.dateRange[1]
+}
+
 
     const deptVal = normalizeDept(order)
     const matchDept = !filters.dept || String(deptVal) === String(filters.dept)
@@ -790,8 +1286,23 @@ const filteredOrders = computed(() => {
     const matchCustomer =
       !kwCustomer ||
       customers.some(c => ((c.name || '').toLowerCase().includes(kwCustomer)))
+    
+    const matchStatus =
+      !filters.__processStatus ||
+      (filters.__processStatus === 'processing' &&
+        (normalizeProcessStatus(order) === 'processing' || normalizeProcessStatus(order) === '办理中')) ||
+      (filters.__processStatus === 'completed' &&
+        (normalizeProcessStatus(order) === 'completed' || normalizeProcessStatus(order) === '已完成')) ||
+      (filters.__processStatus === 'unfinished' &&
+        !['completed', '已完成'].includes(normalizeProcessStatus(order)))
+      || (filters.__processStatus === 'cancelled' &&
+        getStatusGroup(normalizeProcessStatus(order)) === 'cancelled')
+      || (filters.__processStatus === 'returned' &&
+        getStatusGroup(normalizeProcessStatus(order)) === 'returned')
 
-    return matchCode && matchAgent && matchDate && matchDept && matchType && matchNationality && matchCustomer
+    return matchCode && matchContact && matchCompany &&
+           matchDate && matchDept && matchType &&
+           matchNationality && matchCustomer && matchStatus
   })
 })
 
@@ -807,66 +1318,65 @@ const tableRows = computed(() => {
   const customerMode = !!kwCustomer
 
   pagedOrders.value.forEach(order => {
-const orderCode = normalizeOrderCode(order) || 'ORD'
+    const orderCode = normalizeOrderCode(order) || 'ORD'
 
-// 客户分组 key：优先 customer_id，兜底护照+姓名
-const getCustomerKey = (c) =>
-  c.customer_id || `${c.passport || ''}__${c.name || ''}`
+    // 客户分组 key：优先 customer_id，兜底护照+姓名
+    const getCustomerKey = (c) =>
+      c.customer_id || `${c.passport || ''}__${c.name || ''}`
 
-// 1) 按客户分组
-const groups = new Map()
-;(order.customers || []).forEach(c => {
-  const key = getCustomerKey(c)
-  if (!groups.has(key)) groups.set(key, [])
-  groups.get(key).push(c)
-})
-
-// 2) 展平成 bizRows（客户号从 001 开始）
-let customerSeq = 0
-const bizRows = []
-
-for (const [, list] of groups) {
-  customerSeq++
-
-  const displayNo = `${orderCode}-${String(customerSeq).padStart(3, '0')}`
-
-  // 同一客户多业务，按 business_seq 排序（没有就保持原顺序）
-  const sorted = [...list].sort(
-    (a, b) => Number(a.business_seq || 0) - Number(b.business_seq || 0)
-  )
-
-  sorted.forEach(c => {
-    c.agent_commission = Number(c.agent_commission || 0)
-    c.staff_commission = Number(c.staff_commission || 0)
-
-    const f = calcRowFinance(c)
-    const visaExpireAt = normalizeVisaExpireAt(c)
-
-    bizRows.push({
-      ...c,
-      __rowType: 'biz',
-      __orderId: order.id,
-      __rowIndex: (order.customers || []).indexOf(c), // 回写原数组用
-      __rowNoDisplay: displayNo, // ✅ 同一客户所有行都用同一个号
-      __visaExpireAt: visaExpireAt || '',
-      __workPermitText: c.has_work_permit
-        ? '有'
-        : (c.has_work_permit === false ? '无' : '-'),
-      __processStatus: normalizeProcessStatus(c),
-      __bizLabel: normalizeBizType(c),
-      __settlement: normalizeRowSettlement(c),
-      __feeLines: buildFeeLines(c),
-      __finance: {
-        amount: f.feeTotal,
-        upstream_fee: Number(f.upstream || 0),
-        agent_commission: Number(f.agent || 0),
-        staff_commission: Number(f.staff || 0),
-        profit: Number(f.profit || 0)
-      }
+    // 1) 按客户分组
+    const groups = new Map()
+    ;(order.customers || []).forEach(c => {
+      const key = getCustomerKey(c)
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(c)
     })
-  })
-}
 
+    // 2) 展平成 bizRows（客户号从 001 开始）
+    let customerSeq = 0
+    const bizRows = []
+
+    for (const [, list] of groups) {
+      customerSeq++
+
+      const displayNo = `${orderCode}-${String(customerSeq).padStart(3, '0')}`
+
+      // 同一客户多业务，按 business_seq 排序（没有就保持原顺序）
+      const sorted = [...list].sort(
+        (a, b) => Number(a.business_seq || 0) - Number(b.business_seq || 0)
+      )
+
+      sorted.forEach(c => {
+        c.agent_commission = Number(c.agent_commission || 0)
+        c.staff_commission = Number(c.staff_commission || 0)
+
+        const f = calcRowFinance(c)
+        const visaExpireAt = normalizeVisaExpireAt(c)
+
+        bizRows.push({
+          ...c,
+          __rowType: 'biz',
+          __orderId: order.id,
+          __rowIndex: (order.customers || []).indexOf(c), // 回写原数组用
+          __rowNoDisplay: displayNo, // ✅ 同一客户所有行都用同一个号
+          __visaExpireAt: visaExpireAt || '',
+          __workPermitText: c.has_work_permit
+            ? '有'
+            : (c.has_work_permit === false ? '无' : '-'),
+          __processStatus: normalizeProcessStatus(c),
+          __bizLabel: normalizeBizType(c),
+          __settlement: normalizeRowSettlement(c),
+          __feeLines: buildFeeLines(c),
+          __finance: {
+            amount: f.feeTotal,
+            upstream_fee: Number(f.upstream || 0),
+            agent_commission: Number(f.agent || 0),
+            staff_commission: Number(f.staff || 0),
+            profit: Number(f.profit || 0)
+          }
+        })
+      })
+    }
 
     const bizShown = !customerMode
       ? bizRows
@@ -898,16 +1408,15 @@ for (const [, list] of groups) {
     const forceExpand = customerMode && bizShown.length > 0
     const expanded = expandedOrderIds.value.has(order.id) || forceExpand
 
-if (expanded) {
-  // ✅ PATCH：给子表头挂父行引用，金额合计和右侧列才能正常渲染
-  rows.push({
-    __rowType: 'subhead',
-    __orderId: order.id,
-    __parent: orderRow   // ← 关键就是这一行
-  })
-  rows.push(...(customerMode ? bizShown : bizRows))
-}
-
+    if (expanded) {
+      // ✅ PATCH：给子表头挂父行引用，金额合计和右侧列才能正常渲染
+      rows.push({
+        __rowType: 'subhead',
+        __orderId: order.id,
+        __parent: orderRow   // ← 关键就是这一行
+      })
+      rows.push(...(customerMode ? bizShown : bizRows))
+    }
   })
 
   return rows
@@ -940,7 +1449,10 @@ const clearSelection = () => multipleTableRef.value?.clearSelection()
 const rowClassName = ({ row }) => {
   if (row.__rowType === 'order') return 'row-order'
   if (row.__rowType === 'subhead') return 'row-subhead'
-  return 'row-biz'
+  if (row.__rowType === 'biz') {
+    return `row-biz ${bizRowClassByStatus(row)}`
+  }
+  return ''
 }
 
 /** 子行编辑回写 */
@@ -996,20 +1508,31 @@ const handleBatchDelete = () => {
     '批量删除',
     { type: 'warning' }
   ).then(() => {
-    const raw = db.getRaw('ORDERS') || []
-    const selectedIds = selectedOrderRows.value.map(r => r.__orderId)
+    try {
+      selectedOrderRows.value.forEach(row => {
+        const raw = db.getRaw('ORDERS') || []
+        const order = raw.find(o => String(o.id) === String(row.__orderId))
+        if (!order) return
 
-    const updated = raw.map(o => {
-      if (selectedIds.includes(o.id)) {
-        return { ...o, deleted: true, deleted_at: new Date().toLocaleString() }
-      }
-      return o
-    })
+        // ✅ 干净快照
+        const snapshot = JSON.parse(JSON.stringify(order))
 
-    db.saveRaw('ORDERS', updated)
-    loadData()
-    selectedOrderRows.value = []
-    ElMessage.success('已批量移入回收站')
+        softDelete({
+          module: 'order',
+          sourceId: String(order.id),
+          snapshot,
+          operator: '管理员',
+          reason: '批量删除订单'
+        })
+      })
+
+      loadData()
+      selectedOrderRows.value = []
+      ElMessage.success('已批量移入回收站')
+    } catch (e) {
+      console.error(e)
+      ElMessage.error('批量删除失败')
+    }
   })
 }
 
@@ -1034,19 +1557,40 @@ const handleCommand = (cmd, orderId) => {
 }
 
 const handleDelete = (orderId) => {
-  ElMessageBox.confirm('订单将移入回收站，是否继续？', '删除订单', { type: 'warning' })
-    .then(() => {
-      const raw = db.getRaw('ORDERS') || []
-      const updated = raw.map(o => {
-        if (o.id === orderId) {
-          return { ...o, deleted: true, deleted_at: new Date().toLocaleString() }
-        }
-        return o
+  const raw = db.getRaw('ORDERS') || []
+  const idx = raw.findIndex(o => String(o.id) === String(orderId))
+  if (idx === -1) return ElMessage.warning('未找到订单')
+
+  const order = raw[idx]
+
+  ElMessageBox.confirm(
+    '订单将移入回收站，是否继续？',
+    '删除订单',
+    { type: 'warning' }
+  ).then(() => {
+    try {
+      const snapshot = JSON.parse(JSON.stringify(order))
+
+      softDelete({
+        module: 'order',
+        sourceId: String(order.id),
+        snapshot,
+        operator: currentUser?.name || currentUser?.username || '系统',
+        reason: '删除订单'
       })
-      db.saveRaw('ORDERS', updated)
+
+      // ✅ 同步打标：列表立刻消失
+      raw[idx].deleted = true
+      raw[idx].deleted_at = new Date().toISOString()
+      db.saveRaw('ORDERS', raw)
+
       loadData()
       ElMessage.success('订单已移入回收站')
-    })
+    } catch (e) {
+      console.error(e)
+      ElMessage.error('删除失败')
+    }
+  })
 }
 
 /** 导出 */
@@ -1176,13 +1720,22 @@ const handleSingleExport = (orderId) => {
 }
 
 const downloadCSV = (filename, header, rows) => {
-  const csvContent = '\ufeff' + header.join(',') + '\n' + rows.map(r => r.map(x => String(x ?? '')).join(',')).join('\n')
+  const escapeCSV = (v) =>
+    `"${String(v ?? '').replace(/"/g,'""')}"`
+
+  const csvContent =
+    '\ufeff' +
+    header.map(escapeCSV).join(',') +
+    '\n' +
+    rows.map(r => r.map(escapeCSV).join(',')).join('\n')
+
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
   link.download = `${filename}.csv`
   link.click()
 }
+
 
 /** 搜索/重置/路由 */
 const handleSearch = () => {
@@ -1194,16 +1747,123 @@ const resetFilters = () => {
   handleSearch()
 }
 
-const goCreate = () => router.push({ name: 'business.orders.create' })
+const goCreate = () => {
+  if (currentUser?.role === 'agent') {
+    router.push({
+      name: 'business.orders.create',
+      query: { agentMode: '1' }
+    })
+  } else {
+    router.push({ name: 'business.orders.create' })
+  }
+}
+
 const goEdit = (orderId) => router.push({ name: 'business.orders.create', query: { id: orderId } })
 
-onMounted(() => {
+watch(
+  () => route.query.highlight,
+  async (id) => {
+    if (!id) return
+
+    // 复用恢复跳转逻辑
+	await nextTick()
+    await handleRestoreJump()
+  }
+)
+
+onMounted(async () => {
   loadData()
-  if (route.query.agent) {
-    filters.agent = route.query.agent
-    handleSearch()
+  
+stopListen = listenSystemEvent((e) => {
+  if (e.type === 'order-restored') {
+    const id = e.payload?.id
+    if (!id) return
+
+    const raw = db.getRaw('ORDERS') || []
+    const idx = raw.findIndex(o => String(o.id) === String(id))
+    if (idx !== -1) {
+      raw[idx].deleted = false
+      delete raw[idx].deleted_at
+      db.saveRaw('ORDERS', raw)
+    }
+
+    loadData()
+
+    nextTick(() => {
+      expandedOrderIds.value.add(id)
+      document
+        .querySelector(`.biz-row-grid[data-order="${id}"]`)
+        ?.scrollIntoView({ behavior:'smooth', block:'center' })
+    })
+  }
+
+  if (e.type === 'order-purged') {
+    loadData()
   }
 })
+
+  
+  // ✅ 先处理恢复跳转
+  await handleRestoreJump()
+  await autoFocusFromDashboard()
+
+  const q = route.query
+
+  // ✅ 1) 高亮仍然保留
+  if (q.highlightStatus) {
+    highlightStatus.value = String(q.highlightStatus)
+  }
+
+  // ✅ 2) 用适配器统一填充 filters（不改你的过滤系统）
+  applyDashboardQueryToOrdersFilters(q, filters)
+
+  // ✅ 3) 有任何"来自 Dashboard 的筛选语义"，就展开高级区
+  if (q.view || q.processStatus || q.dateRange || q.before || q.agent) {
+    isExpand.value = true
+  }
+
+  // ✅ 4) 继续走你现有流程
+  handleSearch()
+})
+
+const autoFocusFromDashboard = async () => {
+  if (!highlightStatus.value) return
+
+  await nextTick()
+
+  // 找第一条匹配状态的业务行
+  const rows = document.querySelectorAll(
+    `.biz-row-grid[data-status="${highlightStatus.value}"]`
+  )
+
+  if (!rows.length) return
+
+  const row = rows[0]
+  const orderId = row.dataset.order
+
+  // 展开父订单
+  expandedOrderIds.value.add(orderId)
+
+  await nextTick()
+
+  // 滚动到业务行
+  row.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center'
+  })
+
+  // 高亮闪烁
+  row.classList.add('row-highlight')
+  setTimeout(() => {
+    row.classList.remove('row-highlight')
+  }, 2000)
+}
+
+onUnmounted(() => {
+  stopListen && stopListen()
+})
+
+
 </script>
 
 <style scoped>
@@ -1238,7 +1898,6 @@ onMounted(() => {
 
 .customer-hit-hint { margin-left: 22px; color: #2563eb; font-size: 13px; }
 
-
 /* ✅ 子表头右侧列文字必须允许显示 */
 .subhead-right {
   font-size: 11px;
@@ -1249,11 +1908,11 @@ onMounted(() => {
   display: block;
   text-align: center;
 }
+
 /* ✅ 子表头行不要裁剪内容 */
 :deep(.row-subhead .el-table__cell) {
   overflow: visible !important;
 }
-
 
 /* ✅ 子表头：更窄、更紧凑 */
 .subhead-wrap { padding: 4px 0; }
@@ -1325,17 +1984,6 @@ onMounted(() => {
 }
 .status-line { font-size: 12px; line-height: 1.5; display: flex; align-items: center; white-space: nowrap; }
 .dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; display: inline-block; }
-.status-type-success { background: #f0f9eb; color: #67c23a; border: 1px solid #e1f3d8; }
-.status-type-success .dot { background: #67c23a; }
-.status-type-warning { background: #fdf6ec; color: #e6a23c; border: 1px solid #faecd8; }
-.status-type-warning .dot { background: #e6a23c; }
-.status-type-info { background: #f4f4f5; color: #909399; border: 1px solid #e9e9eb; }
-.status-type-info .dot { background: #909399; }
-
-/* 行区分 */
-:deep(.row-order td) { background: #ffffff; }
-:deep(.row-subhead td) { background: #f8fafc; }
-:deep(.row-biz td) { background: #fcfdff; }
 
 /* 表格整体更紧凑 */
 :deep(.order-tree-table) { font-size: 12px; }
@@ -1346,5 +1994,182 @@ onMounted(() => {
 
 @media print {
   .no-print, .el-header, .el-aside, .search-card, .pagination-area, .fixed-right, .batch-toolbar { display: none !important; }
+}
+
+/* =========================
+   办理进度：每条状态独立配色
+   ========================= */
+
+.status-line-yellow {
+  background: #fef9c3;
+  color: #a16207;
+  border: 1px solid #fde047;
+}
+.status-line-yellow .dot { background: #ca8a04; }
+
+.status-line-cyan {
+  background: #ecfeff;
+  color: #0e7490;
+  border: 1px solid #67e8f9;
+}
+.status-line-cyan .dot { background: #06b6d4; }
+
+.status-line-green {
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+.status-line-green .dot { background: #22c55e; }
+
+.status-line-red {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+.status-line-red .dot { background: #ef4444; }
+
+.status-line-gray {
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+.status-line-gray .dot { background: #64748b; }
+
+/* 状态条更像 tag */
+.status-line {
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+/* 子行业务状态底色 */
+:deep(.biz-status-yellow td) {
+  background: #fef9c3 !important;
+}
+:deep(.biz-status-cyan td) {
+  background: #ecfeff !important;
+}
+:deep(.biz-status-green td) {
+  background: #f0fdf4 !important;
+}
+:deep(.biz-status-red td) {
+  background: #fef2f2 !important;
+}
+:deep(.biz-status-gray td) {
+  background: #f1f5f9 !important;
+}
+
+.status-clickable {
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.status-clickable:hover {
+  opacity: 0.8;
+  transform: translateX(2px);
+}
+
+.row-highlight {
+  animation: flashRow 2s ease;
+}
+
+@keyframes flashRow {
+  0% {
+    background-color: #fde68a;
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* =========================
+   页面内滚 - 宽度铺满修复
+   ========================= */
+
+.section-card {
+  width: 100%;
+}
+
+/* =========================
+   表格内滚增强（对齐 Agent 页面风格）
+   ========================= */
+
+/* 表头固定在滚动区顶部 */
+.order-tree-table :deep(.el-table__header-wrapper) {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #fff;
+}
+
+/* 表头背景强化 */
+.order-tree-table :deep(.el-table__header th) {
+  background: #f8fafc !important;
+}
+
+/* 当前行高亮（蓝色底） */
+.order-tree-table :deep(.el-table__body tr.current-row > td) {
+  background-color: rgba(37, 99, 235, 0.14) !important;
+}
+
+/* 当前行左侧蓝色强调条 */
+.order-tree-table
+  :deep(.el-table__body tr.current-row > td:first-child) {
+  box-shadow: inset 4px 0 0 rgba(37, 99, 235, 0.9);
+}
+
+/* hover 高亮 */
+.order-tree-table :deep(.el-table__body tr:hover > td) {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+}
+
+/* 滚动条增强 */
+.order-tree-table :deep(.el-scrollbar__thumb) {
+  background: rgba(100, 116, 139, 0.6) !important;
+  border-radius: 6px;
+}
+.order-tree-table :deep(.el-scrollbar__thumb:hover) {
+  background: rgba(100, 116, 139, 0.9) !important;
+}
+.order-tree-table :deep(.el-scrollbar__bar.is-vertical) {
+  width: 8px;
+}
+
+/* 表格卡片本身不滚，只提供高度 */
+.table-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 滚动区：给 el-table 高度链路 */
+.table-scroll-zone {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* el-table 成为唯一滚动体 */
+.order-tree-table {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 分页不要把 table 撑爆 */
+.pagination-area{
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding-top: 12px;
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.order-tree-table :deep(.el-table__header-wrapper){
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #fff;
 }
 </style>

@@ -45,6 +45,7 @@ export const columnDefinitions: ColumnDefinition[] = [
     align: 'center',
     columnKey: 'alias_no',
     canHide: true,
+	isFixedEnd: true,
     class: 'sticky-last-marker'
   },
   // 护照信息分组

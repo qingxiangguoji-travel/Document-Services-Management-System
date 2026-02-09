@@ -46,6 +46,10 @@ COPY . .
 # PHP 依赖
 # ===============================
 RUN composer install --no-dev --optimize-autoloader
+RUN php artisan config:clear \
+ && php artisan route:clear \
+ && php artisan view:clear
+
 
 # ===============================
 # 前端构建

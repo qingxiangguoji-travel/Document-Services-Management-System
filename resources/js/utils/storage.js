@@ -4,21 +4,77 @@
 const DB_KEYS = {
   AGENTS: 'AGENTS_DATA',
   ORDERS: 'BUSINESS_ORDERS_DATA',
-  CONFIGS: 'SYSTEM_CONFIGS_DATA'
-};
+  CONFIGS: 'SYSTEM_CONFIGS_DATA',
+  STAFF_LIST: 'STAFF_LIST',
+
+  // 文件中心统一主键（唯一权威）
+  FILES: 'FILES_CENTER'
+}
 
 export const db = {
   // --- 基础读写 ---
   getRaw(key) {
-    const data = localStorage.getItem(DB_KEYS[key]);
-    return data ? JSON.parse(data) : null;
+    const realKey = DB_KEYS[key];
+    if (!realKey) {
+      console.warn('[DB] 未注册的存储Key:', key);
+      return null;
+    }
+
+    const data = localStorage.getItem(realKey);
+    if (!data) return null;
+
+    try {
+      return JSON.parse(data);
+    } catch (e) {
+      console.warn('[DB] JSON损坏:', realKey, e);
+      return null;
+    }
   },
 
   saveRaw(key, data) {
-    localStorage.setItem(DB_KEYS[key], JSON.stringify(data));
+    const realKey = DB_KEYS[key];
+    if (!realKey) {
+      throw new Error(`[DB] 禁止写入未注册Key: ${key}`);
+    }
+
+    localStorage.setItem(realKey, JSON.stringify(data));
   },
 
-  // --- 配置中心 (严格保持原有字段名) ---
+  // =========================
+  // 🔥 文件中心（物理隔离层）
+  // =========================
+
+  /**
+   * 获取文件中心数据
+   * 自动兼容旧 FILES_CENTER 数据
+   */
+getFiles() {
+  const raw = localStorage.getItem(DB_KEYS.FILES)
+  if (!raw) return []
+
+  try {
+    const data = JSON.parse(raw)
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
+},
+
+
+
+  /**
+   * 保存文件中心数据
+   * 永远写入独立桶
+   */
+ saveFiles(data) {
+  if (!Array.isArray(data)) return
+  localStorage.setItem(DB_KEYS.FILES, JSON.stringify(data))
+},
+
+
+  // =========================
+  // --- 配置中心 ---
+  // =========================
   getConfigs() {
     const saved = this.getRaw('CONFIGS');
     const defaults = {
@@ -33,11 +89,9 @@ export const db = {
         { label: '办理中', value: 'processing', color: 'warning' },
         { label: '已完成', value: 'completed', color: 'success' }
       ],
-      // 预留费用字段，防止读取报错
-      fees: [] 
+      fees: []
     };
-    
-    // 资深写法：深度合并，确保即便 saved 缺少某个 key，也不会导致页面崩溃
+
     if (!saved) return defaults;
     return {
       nationalities: saved.nationalities || defaults.nationalities,
@@ -49,80 +103,139 @@ export const db = {
   },
 
   saveConfigs(newConfigs) {
-    // 仅保存增量数据，不破坏存储结构
     this.saveRaw('CONFIGS', newConfigs);
   },
 
+  // =========================
   // --- 代理商管理 ---
+  // =========================
   getAgents() {
     return this.getRaw('AGENTS') || [];
   },
 
   saveAgent(agentData) {
     const agents = this.getAgents();
-    if (agentData.id) {
-      const idx = agents.findIndex(a => a.id === agentData.id);
-      if (idx !== -1) agents[idx] = agentData;
-    } else {
+
+    if (!agentData.id) {
       agentData.id = Date.now();
       agents.unshift(agentData);
+    } else {
+      const idx = agents.findIndex(a => String(a.id) === String(agentData.id));
+
+      if (idx !== -1) {
+        agents[idx] = agentData;
+      } else {
+        // ✅ 不存在就插入（恢复场景）
+        agents.unshift(agentData);
+      }
     }
+
     this.saveRaw('AGENTS', agents);
     return agentData;
   },
 
-  // --- 订单管理 (严格保护关联逻辑) ---
-  getOrders(filters = {}) {
-    const rawOrders = this.getRaw('ORDERS') || [];
+  // =========================
+  // --- 订单管理 ---
+  // =========================
+getOrders(filters = {}) {
+  const rawOrders = this.getRaw('ORDERS') || [];
+  const agents = this.getAgents();
+  const configs = this.getConfigs();
+
+  let processed = rawOrders.map(order => {
+    // ⭐ 新：通过 agent_company_id 找代理
+    const agentDetail =
+      agents.find(a => String(a.id) === String(order.agent_company_id)) ||
+      { name: order.agent_company || '未知代理' };
+
+    const dept = configs.departments.find(
+      d => Number(d.id) === Number(order.department_id)
+    );
+
+    const deptName = dept ? dept.name : (order.deptName || '未知部门');
+
+    return { ...order, agentDetail, deptName };
+  });
+
+  // ⭐ 状态筛选
+  if (filters.status) {
+    processed = processed.filter(o => o.status === filters.status);
+  }
+
+  // ⭐ 编号筛选
+  if (filters.code) {
+    processed = processed.filter(o =>
+      String(o.code || '').includes(filters.code)
+    );
+  }
+
+  return processed.sort(
+    (a, b) => new Date(b.created_at) - new Date(a.created_at)
+  );
+},
+
+saveOrder(orderData) {
+  const orders = this.getRaw('ORDERS') || [];
+
+  // ⭐ 获取当前登录用户（多租户关键）
+  const currentUser = JSON.parse(localStorage.getItem('AUTH_USER_V1') || 'null');
+
+  // =============================
+  // ⭐ 多租户字段自动注入
+  // =============================
+  if (!orderData.id) {
+    orderData.id = Date.now();
+    orderData.created_at = new Date().toISOString();
+
+    // ⭐ 谁创建的订单（审计）
+    orderData.created_by_user_id = currentUser?.id || null;
+    orderData.created_by_name = currentUser?.name || '未知用户';
+  }
+
+  // ⭐ 关键：写入代理公司ID（权限核心）
+  // 创建订单页面已经选了代理公司 → 这里强制标准化存储
+  if (orderData.agent_company_id) {
     const agents = this.getAgents();
-    const configs = this.getConfigs();
+    const agent = agents.find(a => String(a.id) === String(orderData.agent_company_id));
 
-    let processed = rawOrders.map(order => {
-      // 1. 兼容性搜索代理商 (逻辑保持原样)
-      const agentDetail = agents.find(a => a.id === order.agent_id) || 
-                          agents.find(a => a.name === order.agent) || 
-                          { name: order.agent || '未知代理' };
-      
-      // 2. 实时匹配部门名称 (确保 department_id 关联不丢失)
-      const dept = configs.departments.find(d => Number(d.id) === Number(order.department_id));
-      const deptName = dept ? dept.name : (order.deptName || '未知部门');
-
-      return { ...order, agentDetail, deptName };
-    });
-
-    // 3. 条件筛选 (保持原有代码，确保搜索功能正常)
-    if (filters.agent_id) {
-      processed = processed.filter(o => o.agent_id == filters.agent_id || o.agentDetail.id == filters.agent_id);
+    if (agent) {
+      orderData.agent_company = agent.name; // 名称快照
     }
-    if (filters.status) {
-      processed = processed.filter(o => o.status === filters.status);
-    }
-    if (filters.code) {
-      processed = processed.filter(o => o.code.includes(filters.code));
-    }
+  }
 
-    return processed.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  },
+  // =============================
+  // 保存逻辑
+  // =============================
+  if (!orderData.id) {
+    orders.unshift(orderData);
+  } else {
+    const idx = orders.findIndex(o => String(o.id) === String(orderData.id));
+    if (idx !== -1) orders[idx] = orderData;
+    else orders.unshift(orderData);
+  }
 
-  // 针对你的“保存不校验”问题，这里增加一个逻辑检查点（如果其他页面调用 saveOrder）
-  saveOrder(orderData) {
-    if (!orderData.customerName || !orderData.passportNo) {
-      throw new Error("关键数据丢失：姓名或护照号必填");
-    }
-    const orders = this.getRaw('ORDERS') || [];
-    // ... 保存逻辑
-    this.saveRaw('ORDERS', orders);
-  },
+  this.saveRaw('ORDERS', orders);
+  return orderData;
+},
+
 
   getAgentStats(agentId) {
     const orders = this.getOrders({ agent_id: agentId });
     return {
       totalCount: orders.length,
-      totalAmount: orders.reduce((s, o) => s + Number(o.total_fee || 0), 0),
+      totalAmount: orders.reduce(
+        (s, o) => s + Number(o.total_fee || 0),
+        0
+      ),
       unpaidAmount: orders
         .filter(o => o.settlement === 'unpaid')
-        .reduce((s, o) => s + Number(o.total_fee || 0), 0),
-      completedCount: orders.filter(o => o.status === 'completed').length
+        .reduce(
+          (s, o) => s + Number(o.total_fee || 0),
+          0
+        ),
+      completedCount: orders.filter(
+        o => o.status === 'completed'
+      ).length
     };
   }
 };

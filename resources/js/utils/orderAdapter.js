@@ -73,10 +73,14 @@ function calcOrderFinance(rows = []) {
 // =========================
 // 保存适配器（页面 → DB）
 // =========================
-export function normalizeOrderForSave(form) {
+// =========================
+// 保存适配器（页面 / DB 对象 → DB）
+// =========================
+export function normalizeOrderForSave(input) {
+  const form = input || {}
+
   const cleanCustomers = (form.customers || []).map(row => {
     const { _displayNo, __temp, finance, ...rest } = row
-
     return {
       ...rest,
       fee_visa: Number(row.fee_visa) || 0,
@@ -93,16 +97,32 @@ export function normalizeOrderForSave(form) {
     }
   })
 
+  // ✅ 兼容：页面用 order_no，DB/转单对象可能用 code
+  const code = form.code || form.order_no || ''
+
   return {
+    // ===== 基础 =====
     id: form.id,
-    code: form.order_no,
+    code,
     created_at: form.created_at,
+
     agent_company: form.agent_company || '',
-    agent_contact: form.agent_id || '',
+    agent_contact: form.agent_contact || form.agent_id || '',
     service_staff: form.service_staff || '',
     remark: form.remark || '',
     status: form.status || 'Pending',
-    customers: cleanCustomers
+    customers: cleanCustomers,
+
+    // ✅ 一定要保留：订单流转字段（你转单/列表展示全靠它）
+    order_type: form.order_type || 'notify', // notify | confirmed | history
+    source_notify_id: form.source_notify_id || null,
+    linked_order_id: form.linked_order_id || null,
+    converted_at: form.converted_at || null,
+    confirmed_at: form.confirmed_at || null,
+
+    // ✅ 可选：保留删除字段（否则删除/回收站也会乱）
+    deleted: !!form.deleted,
+    deleted_at: form.deleted_at || null
   }
 }
 

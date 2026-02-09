@@ -1,48 +1,70 @@
 <template>
   <el-config-provider :locale="zhCn">
     <div class="create-order-page">
-      <PageLayout>
+      <PageLayout :fixed-body="true">
         <template #title>
-  {{ isEditMode ? '编辑订单' : '业务订单录入' }}
-</template>
-<template #subtitle>
-  <span v-if="isEditMode" style="color:#f59e0b;font-weight:700;">
-    ⚠ 正在编辑订单（保存将覆盖原数据）
-  </span>
-  <span v-else>
-    管理代理订单、客户明细及证件办理进度
-  </span>
-</template>
-
+          <div class="title-row">
+            <span class="title-text">
+              {{ isEditMode ? '编辑订单' : '业务订单录入' }}
+            </span>
+            
+            <span
+              class="title-badge"
+              :class="badgeInfo.type"
+            >
+              {{ badgeInfo.text }}
+              <template v-if="badgeInfo.link">
+                <el-link
+                  type="primary"
+                  :underline="false"
+                  @click="badgeInfo.action"
+                  :title="badgeInfo.type === 'history'
+                    ? '点击查看生成的新订单'
+                    : '点击查看来源订单'"
+                >
+                  {{ badgeInfo.link }}
+                </el-link>
+              </template>
+            </span>
+          </div>
+        </template>
+        
+        <template #subtitle>
+          <span v-if="isEditMode" style="color:#f59e0b;font-weight:700;">
+            ⚠ 正在编辑订单（保存将覆盖原数据）
+          </span>
+          <span v-else>
+            管理代理订单、客户明细及证件办理进度
+          </span>
+        </template>
+        
         <template #actions>
-		<el-button
-  type="info"
-  plain
-  :icon="Plus"
-  @click="handleCreateNew"
->
-  新建订单
-</el-button>
-<el-button
-  v-if="isEditMode"
-  type="warning"
-  plain
-  :icon="CopyDocument"
-  @click="handleCopyOrder"
->
-  复制订单
-</el-button>
-<el-button
-  v-if="isEditMode"
-  type="danger"
-  plain
-  :icon="Delete"
-  @click="handleDeleteOrder"
->
-  删除订单
-</el-button>
-
-
+          <el-button
+            type="info"
+            plain
+            :icon="Plus"
+            @click="handleCreateNew"
+          >
+            新建订单
+          </el-button>
+          <el-button
+            v-if="canShowConvertBtn"
+            type="danger"
+            @click="handleConvertOrder"
+          >
+            转为新订单
+          </el-button>
+          
+          <el-button
+            v-if="isEditMode"
+            type="danger"
+            plain
+            :icon="Delete"
+            @click="handleDeleteOrder"
+          >
+            删除订单
+          </el-button>
+          
           <el-dropdown @command="handleExport">
             <el-button :icon="Download" plain>导出数据</el-button>
             <template #dropdown>
@@ -53,8 +75,15 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-
-
+          
+          <el-upload
+            :show-file-list="false"
+            accept=".xlsx,.csv"
+            :http-request="handleMigrateImport"
+          >
+            <el-button type="primary">批量导入历史订单</el-button>
+          </el-upload>
+          
           <el-upload
             action="#"
             :auto-upload="false"
@@ -65,22 +94,14 @@
           >
             <el-button type="success" :icon="Upload" plain>导入数据</el-button>
           </el-upload>
-
+          
           <el-button :icon="Printer" plain @click="printDialogVisible = true">打印预览</el-button>
           
           <el-button type="primary" size="large" :icon="Check" :loading="saving" @click="submitForm" class="btn-emphasize">
             确认并保存订单 (F8)
           </el-button>
         </template>
-<div v-if="isEditMode" class="edit-mode-bar">
-  🟡 当前正在编辑订单：
-  <strong>{{ form.order_no }}</strong>
-  <span class="edit-sub">
-    创建于 {{ form.created_at }}
-  </span>
-</div>
-
-
+        
         <div class="page-content-wrapper">
           <el-form ref="formRef" :model="form" class="logic-flex-wrapper">
             <div class="top-settings-bar">
@@ -100,35 +121,64 @@
                 />
               </div>
               <div class="field-item">
-                <span class="field-label">代理公司/个人</span>
-                <el-select 
-                  v-model="form.agent_company" 
-                  placeholder="请选择或输入搜索" 
-                  style="width:180px" 
-                  clearable
-                  filterable
-                  remote
-                  :remote-method="searchAgents"
-                  :loading="agentSearchLoading"
-                  @change="handleAgentCompanyChange"
-                >
-                  <el-option v-for="item in filteredAgentList" :key="item.id" :label="item.name" :value="item.name" />
-                </el-select>
-              </div>
-              <div class="field-item">
-                <span class="field-label">代理联系人</span>
-                <el-select v-model="form.agent_id" filterable placeholder="选择联系人" style="width:180px" @change="syncAgentToRows">
-                  <el-option v-for="a in filteredContactOptions" :key="a.unique_key" :label="a.display_label" :value="a.display_label" />
-                </el-select>
+  <span class="field-label">代理联系人</span>
+  <div class="inline-input-wrapper">
+    <el-select
+      v-model="form.agent_contact_id"
+      filterable
+	  :disabled="currentUser?.role === 'agent'"
+      placeholder="选择联系人"
+      style="width:180px"
+      @change="handleAgentContactChange"
+    >
+      <el-option
+        v-for="c in contactOptions"
+        :key="c.id"
+        :label="`${c.company_name} - ${c.name}`"
+        :value="c.id"
+      />
+    </el-select>
+                  <el-tooltip content="管理代理联系人" placement="top">
+                    <el-button
+                      icon="User"
+                      circle
+                      size="small"
+                      class="inline-manage-btn"
+                      @click="goToAgentManage"
+                    />
+                  </el-tooltip>
+                </div>
               </div>
               <div class="field-item">
                 <span class="field-label">开单客服</span>
-                <el-select v-model="form.service_staff" placeholder="选择客服" style="width:150px" filterable allow-create>
-                  <el-option v-for="staff in staffOptions" :key="staff.id || staff.name" :label="staff.name" :value="staff.name" />
-                </el-select>
+                <div class="inline-input-wrapper">
+                  <el-select
+                    v-model="form.service_staff"
+                    placeholder="选择客服"
+                    style="width:150px"
+                    filterable
+                    allow-create
+                  >
+                    <el-option
+                      v-for="staff in staffOptions"
+                      :key="staff.id || staff.name"
+                      :label="staff.name"
+                      :value="staff.name"
+                    />
+                  </el-select>
+                  <el-tooltip content="管理客服人员" placement="top">
+                    <el-button
+                      icon="Setting"
+                      circle
+                      size="small"
+                      class="inline-manage-btn"
+                      @click="goToStaffManage"
+                    />
+                  </el-tooltip>
+                </div>
               </div>
             </div>
-
+            
             <div class="sub-control-bar">
               <el-radio-group v-model="currentModule" size="default">
                 <el-radio-button label="all">全部显示</el-radio-button>
@@ -142,13 +192,17 @@
                 <el-button type="primary" :icon="User" size="small" @click="addRow()">添加客户</el-button>
               </div>
             </div>
-
+            
             <!-- 表格区域 - 使用重构后的 OrderTable 组件 -->
             <div class="table-main-area">
               <OrderTable 
+                class="order-table-fill"
                 :data="form.customers"
                 :order-no="form.order_no"
                 :module="currentModule"
+                :order-type="form.order_type"
+                :can-edit-status="canEditProcessStatus"
+                @process-change="handleProcessChange"
                 @remove="handleRemoveRow"
                 @open-files="handleFiles"
                 @update:data="updateCustomers"
@@ -158,7 +212,7 @@
                 ref="orderTableRef"
               />
             </div>
-
+            
             <div class="footer-black-bar">
               <div class="footer-left">
                 <div class="remark-section">
@@ -176,7 +230,7 @@
                   </div>
                 </div>
               </div>
-
+              
               <div class="footer-center">
                 <div class="footer-stats-grid">
                   <div class="stat-item">
@@ -197,7 +251,7 @@
                   </div>
                 </div>
               </div>
-
+              
               <div class="footer-right">
                 <div class="footer-actions">
                   <el-tooltip content="导出当前列表数据" placement="top">
@@ -214,16 +268,17 @@
           </el-form>
         </div>
       </PageLayout>
-
+      
       <!-- 文件管理抽屉 -->
       <file-manager-drawer 
         v-model:visible="fileState.show" 
         :customer-data="fileState.data"
+        :order-data="form"
         :customer-id="fileState.customerId"
         :row-id="fileState.rowId"
         @save="onFilesSaved" 
       />
-
+      
       <el-dialog v-model="printDialogVisible" title="选择打印显示的列" width="400px">
         <div style="margin-bottom: 15px; color: #64748b;">前5列已固定，请选择需要额外打印的费用列：</div>
         <el-checkbox-group v-model="printFields">
@@ -240,7 +295,7 @@
           <el-button type="primary" @click="handlePrint">开始打印预览</el-button>
         </template>
       </el-dialog>
-
+      
       <div id="print-mount-point" style="display: none;">
         <OrderPrintTemplate 
           id="printable-invoice"
@@ -253,11 +308,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { softDelete } from '@/domain/recycleService'
+import { isStatusEditable } from '@/domain/orderStatus'
+import { ref, reactive, computed, onMounted, nextTick, watch, onActivated, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElConfigProvider, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
-import { Plus, User, Download, Upload, Printer, Check, EditPen, CopyDocument, Delete } from '@element-plus/icons-vue'
+import { Plus, User, Download, Upload, Printer, Check, EditPen, Delete } from '@element-plus/icons-vue'
 import PageLayout from '@/layouts/PageLayout.vue'
 import OrderTable from './OrderTable/index.vue'  // 修改：导入重构后的表格组件
 import FileManagerDrawer from './components/FileManagerDrawer.vue'
@@ -266,21 +323,359 @@ import { db } from '@/utils/storage'
 import * as XLSX from 'xlsx'
 import { professionalPrint } from './components/print-styles/print-utils'
 import { normalizeOrderForSave } from '@/utils/orderAdapter'
+import { dryRunMigrate, commitMigrate } from '@/domain/services/orderMigrationService'
+import { auth } from '@/utils/auth'
 
+// 当前登录用户（权限核心）
+const currentUser = auth.getUser()
 
+const contactOptions = ref([])  // 只用这个就够了
+
+const syncAgentToRows = () => {
+  const display = buildAgentDisplay()
+  ;(form.customers || []).forEach(r => {
+    r.agent_contact = display
+  })
+}
+
+const buildAgentDisplay = () => {
+  const company = form.agent_company_name || ''
+  const contact = form.agent_contact_name || ''
+  if (!company && !contact) return ''
+  if (!company) return contact
+  if (!contact) return company
+  return `${company} - ${contact}`
+}
+
+const handleAgentContactChange = (contactId) => {
+  const found = contactOptions.value.find(c => String(c.id) === String(contactId))
+  if (!found) return
+
+  // ✅ 一次性写入 4 字段
+  form.agent_contact_id = found.id
+  form.agent_contact_name = found.name
+  form.agent_company_id = found.company_id
+  form.agent_company_name = found.company_name
+
+  // ✅ 同步到表格每一行（恢复你之前的功能）
+  syncAgentToRows()
+}
+
+const handleMigrateImport = async (options) => {
+  const file = options.file   // ✅ 真正的 File 在这里
+  
+  if (!file) {
+    ElMessage.error('未获取到文件')
+    return
+  }
+  
+  console.log('开始迁移导入:', file.name)
+  
+  const preview = await dryRunMigrate(file)
+  
+  if (!preview.length) {
+    ElMessage.warning('没有识别到可导入的订单数据')
+    return
+  }
+  
+  const msg = preview.map(p =>
+    `${p.date} | ${p.agent.company}-${p.agent.contact} → ${p.preview_order_code} (${p.rows} 行)`
+  ).join('\n')
+  
+  ElMessageBox.confirm(
+    `将创建以下订单：\n\n${msg}`,
+    '导入预览',
+    { type: 'warning', dangerouslyUseHTMLString: false }
+  ).then(async () => {
+    const result = await commitMigrate(file)
+    
+    ElMessage.success(`导入完成（${result.orders.length}个订单）`)
+    location.reload()
+  })
+}
+
+let staffHookRegistered = false
+
+onUnmounted(() => {
+  window.removeEventListener('focus', loadStaffOptions)
+})
+
+// ==================== 订单分类真理源 ====================
+/**
+ * 返回四种业务态：
+ * notify
+ * confirmed
+ * history-notify
+ * history-confirmed
+ */
+const getOrderClass = () => {
+  if (!form.id) return 'notify'
+  
+  const today = todayStr()
+  const isHistory = form.created_at < today
+  
+  if (!isHistory) {
+    return form.order_type === 'confirmed'
+      ? 'confirmed'
+      : 'notify'
+  }
+  
+  // 历史
+  return form.order_type === 'confirmed'
+    ? 'history-confirmed'
+    : 'history-notify'
+}
+
+const loadStaffOptions = () => {
+  const staff = db.getRaw('STAFF_LIST') || []
+  
+  console.log('🔄 加载客服列表:', staff)
+  
+  staffOptions.value = staff.map(s => ({
+    id: s.id,
+    name: s.name,
+    ruleTag: s.ruleTag,
+    ruleDesc: s.ruleDesc
+  }))
+}
+
+const orderClass = computed(() => getOrderClass())
+
+const canEditOrder = computed(() => {
+  return orderClass.value !== 'history-notify'
+})
+
+const canEditProcessStatus = computed(() => {
+  return orderClass.value !== 'history-notify'
+})
+
+const persistOrderTypeChange = () => {
+  if (!form.id) return
+  
+  const raw = db.getRaw('ORDERS') || []
+  const idx = raw.findIndex(o => String(o.id) === String(form.id))
+  if (idx === -1) return
+  
+  raw[idx] = {
+    ...raw[idx],
+    order_type: form.order_type,
+    source_order_id: form.source_order_id,
+    linked_order_id: form.linked_order_id,
+    confirmed_at: form.confirmed_at,
+    converted_at: form.converted_at || null
+  }
+  
+  db.saveRaw('ORDERS', raw)
+  
+  console.log('[ORDER FLOW] 状态已持久化', {
+    id: form.id,
+    order_type: form.order_type
+  })
+}
+
+const todayStr = () => new Date().toISOString().slice(0, 10)
+
+// ===== 订单关联显示 =====
+const badgeInfo = computed(() => {
+  const cls = orderClass.value
+  const isHistory = cls.startsWith('history')
+  const isConfirmed = cls.includes('confirmed')
+  
+  const hasSource = !!form.source_order_id
+  const hasLinked = !!form.linked_order_id
+  
+  // 状态文字
+  const statusText = isHistory
+    ? isConfirmed
+      ? '🔒 历史确认订单'
+      : '🔒 历史通知订单'
+    : isConfirmed
+      ? '🔗 确认订单'
+      : '⚠ 通知订单'
+  
+  // 历史订单 → 显示生成的新订单
+  if (hasLinked) {
+    return {
+      type: 'history',
+      text: `${statusText} → 生成：`,
+      link: linkedOrderNo.value,
+      action: goToLinkedOrder,
+      tip: '这是历史订单，点击查看生成的新订单'
+    }
+  }
+  
+  // 新订单 → 只要有来源就一直显示
+  if (hasSource) {
+    return {
+      type: isConfirmed ? 'confirmed' : 'notify',
+      text: `${statusText} → 来源：`,
+      link: linkedOrderNo.value,
+      action: goToLinkedOrder,
+      tip: '该订单来源于历史订单，点击查看来源'
+    }
+  }
+  
+  // 普通订单
+  return {
+    type: isConfirmed ? 'confirmed' : 'notify',
+    text: statusText,
+    link: null,
+    action: null,
+    tip: ''
+  }
+})
+
+const convertNotifyToConfirmed = () => {
+  form.order_type = 'confirmed'
+  form.confirmed_at = new Date().toISOString()
+  
+  // 🔥 永远不要清 source_order_id
+  // form.source_order_id = null
+  form.linked_order_id = null
+  
+  persistOrderTypeChange()
+}
+
+const linkedOrderNo = computed(() => {
+  const orders = db.getRaw('ORDERS') || []
+  
+  // 历史订单 → 找新订单
+  if (orderClass.value.startsWith('history')) {
+    if (!form.linked_order_id) return null
+    const found = orders.find(o => String(o.id) === String(form.linked_order_id))
+    return found?.order_no || found?.code || null
+  }
+  
+  // 新订单 → 找来源订单
+  if (!form.source_order_id) return null
+  const found = orders.find(o => String(o.id) === String(form.source_order_id))
+  return found?.order_no || found?.code || null
+})
+
+const goToLinkedOrder = () => {
+  let targetId = null
+  
+  if (orderClass.value.startsWith('history')) {
+    targetId = form.linked_order_id
+  } else {
+    targetId = form.source_order_id
+  }
+  
+  if (!targetId) return
+  
+  router.push({
+    name: 'business.orders',
+    query: { id: targetId }
+  })
+}
+
+const handleProcessChange = (newStatus, row) => {
+  const cls = orderClass.value
+  const oldStatus = row.process_status
+  
+  // 1. 全锁
+  if (cls === 'history-notify') {
+    ElMessage.warning('历史通知订单不可修改，请转为新订单')
+    row.process_status = oldStatus
+    return
+  }
+  
+  // 2. notify → confirmed 自动升级
+  if (cls === 'notify') {
+    const isFirstProcess =
+      (oldStatus === '已录入' ||
+        oldStatus === 'Pending' ||
+        oldStatus === 'created') &&
+      newStatus !== oldStatus
+    
+    if (isFirstProcess) {
+      convertNotifyToConfirmed()
+      persistOrderTypeChange()
+      
+      // 🔥 强制触发响应链
+      form.order_type = 'confirmed'
+      form.confirmed_at = new Date().toISOString()
+      
+      ElMessage.success('订单已自动转为【确认订单】')
+    }
+  }
+  
+  // 3. 写值
+  applyProcessStatusToForm(row.id, newStatus)
+}
+
+const applyProcessStatusToForm = (rowId, status) => {
+  // 改当前表格行
+  const row = form.customers.find(r => r.id === rowId)
+  if (row) row.process_status = status
+  
+  // 如果你有统一保存函数，这里可以顺手调用
+  // persistOrderToStorage()
+}
 
 const router = useRouter()
 const route = useRoute()
+// 页面使用的订单类型桥接变量
+const orderType = computed(() => form.order_type)
+
+// 关联历史订单显示用（查数据库拿订单编号）
+const linkedHistoryOrderNo = computed(() => {
+  if (!form.linked_order_id) return null
+  
+  const orders = db.getRaw('ORDERS') || []
+  const linked = orders.find(o => String(o.id) === String(form.linked_order_id))
+  
+  return linked?.code || linked?.order_no || null
+})
+
 const saving = ref(false)
 const currentModule = ref('all')
 const isEditMode = ref(false)
 const printDialogVisible = ref(false)
 const printFields = ref(['fee_visa', 'fee_work', 'special_fee'])
 const orderTableRef = ref(null)
+const today = () => new Date().toISOString().slice(0, 10)
+
+const canShowConvertBtn = computed(() => {
+  if (!isEditMode.value) return false
+  if (!form.id) return false
+  if (form.linked_order_id) return false
+  
+  return (
+    orderClass.value === 'history-notify' ||
+    orderClass.value === 'history-confirmed'
+  )
+})
+
+const normalizeFileRecord = (raw, ctx) => {
+  return {
+    id: raw.id || raw.__id || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    name: raw.name,
+    size: raw.size || 0,
+    category: raw.category || '未分类',
+    
+    orderId: ctx.orderId,
+    orderCode: ctx.orderCode,
+    customerId: ctx.customerId,
+    customerName: ctx.customerName,
+    rowId: ctx.rowId,
+    
+    fileType: raw.fileType || 'file',
+    mimeType: raw.mimeType || '',
+    
+    // 🔥 真理字段
+    dataUrl: raw.dataUrl || raw.url || '',
+    
+    // 兼容字段（旧代码用的）
+    url: raw.dataUrl || raw.url || '',
+    
+    uploadedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    uploadedBy: ctx.uploadedBy || 'system'
+  }
+}
 
 const isDirty = ref(false)
 let formSnapshot = ''
-
 
 // 日期快捷选项
 const dateShortcuts = [
@@ -297,100 +692,72 @@ const dateShortcuts = [
   }}
 ]
 
-const handleCopyOrder = () => {
-  ElMessageBox.confirm(
-    '将基于当前订单创建一份新订单，原订单不会被修改，是否继续？',
-    '复制订单',
-    { type: 'info' }
-  ).then(() => {
-    // 深拷贝整个表单
-    const cloned = JSON.parse(JSON.stringify(form))
-
-    // 清空订单级字段
-    cloned.id = null
-    cloned.order_no = ''
-    cloned.created_at = new Date().toISOString().split('T')[0]
-
-    // 重新生成所有客户 / 行 ID
-    const customerIdMap = {}
-
-    cloned.customers = (cloned.customers || []).map(row => {
-      // 给每个客户一个新ID
-      let newCustomerId = customerIdMap[row.customer_id]
-      if (!newCustomerId) {
-        newCustomerId = generateCustomerId({
-          name: row.name,
-          passport: row.passport
-        })
-        customerIdMap[row.customer_id] = newCustomerId
-      }
-
-      return {
-        ...row,
-        id: generateRowId(),
-        customer_id: newCustomerId,
-        is_settled: '否',
-        upstream_is_settled: '否'
-      }
-    })
-
-    // 写回表单
-    Object.assign(form, cloned)
-
-    // 切换到新建模式
-    isEditMode.value = false
-
-    // 生成新订单号
-    nextTick(() => {
-      updateOrderNo()
-      formSnapshot = JSON.stringify(form)
-      isDirty.value = false
-    })
-
-    ElMessage.success('已复制为新订单，请确认后保存')
-  })
-}
 const handleDeleteOrder = () => {
+  if (!form.id) return
+  
   ElMessageBox.confirm(
     `确定将订单【${form.order_no}】移入回收站吗？`,
     '删除订单',
     { type: 'warning' }
   ).then(() => {
-    const raw = db.getRaw('ORDERS') || []
+    try {
+      // 构造完整快照（恢复全靠它）
+const snapshot = {
+  ...normalizeOrderForSave(form),
 
-    const updated = raw.map(o => {
-      if (o.id === form.id) {
-        return {
-          ...o,
-          deleted: true,
-          deleted_at: new Date().toISOString()
-        }
-      }
-      return o
-    })
+  id: form.id,
+  code: form.order_no,
 
-    db.saveRaw('ORDERS', updated)
-
-    ElMessage.success('订单已移入回收站')
-    router.push({ name: 'business.orders' })
-  })
+  // ⭐⭐ 必须补上代理字段（关键修复）
+  agent_company_id: form.agent_company_id,
+  agent_company_name: form.agent_company_name,
+  agent_contact_id: form.agent_contact_id,
+  agent_contact_name: form.agent_contact_name
+}
+      
+      softDelete({
+        module: 'order',
+        sourceId: String(form.id),
+        snapshot,
+        operator: form.service_staff || 'system',
+        reason: '用户手动删除订单'
+      })
+      
+      ElMessage.success('订单已移入回收站')
+      router.push({ name: 'business.orders' })
+    } catch (e) {
+      console.error(e)
+      ElMessage.error(e.message || '删除失败')
+    }
+  }).catch(() => {})
 }
 
 // ==================== 表单数据 ====================
 const form = reactive({ 
-  id: null, 
-  order_no: '', 
-  created_at: new Date().toISOString().split('T')[0], 
-  agent_company: '', 
-  agent_id: '', 
-  service_staff: '', 
-  remark: '', 
-  customers: [], 
-  status: 'Pending' 
+  id: null,
+  order_no: '',
+  created_at: new Date().toISOString().split('T')[0],
+  
+agent_company_id: null,
+agent_company_name: '',
+agent_contact_id: '',
+agent_contact_name: '',
+  service_staff: '',
+  remark: '',
+  customers: [],
+  
+  // 订单流转核心字段
+  order_type: 'notify',     // notify | confirmed | history
+  status: 'Draft',         // Draft | Processing | Completed | Cancelled
+  
+  // 🔥 转单追溯字段（统一模型）
+  source_order_id: null,   // 新订单 → 来源订单
+  linked_order_id: null,  // 历史订单 → 生成的新订单
+  converted_at: null,
+  confirmed_at: null
 })
 
 // ==================== 新增：表格事件处理 ====================
-
 /**
  * 处理删除行事件（适配重构后的表格）
  */
@@ -412,7 +779,6 @@ const handleHideRow = (rowId) => {
 }
 
 // ==================== 粘贴事件处理 ====================
-
 /**
  * 处理表格粘贴事件
  */
@@ -449,7 +815,6 @@ const handleTablePaste = (pasteText) => {
         }
       })
     }
-    
   } catch (error) {
     console.error('粘贴失败:', error)
     ElMessage.error('粘贴失败：' + error.message)
@@ -529,7 +894,6 @@ const batchAddPastedRows = (rowsData) => {
 }
 
 // ==================== 数据工具函数 ====================
-
 /**
  * 生成稳定的客户ID
  */
@@ -572,7 +936,11 @@ const createEmptyRow = () => {
     entry_date: '', 
     visa_expiry: '', 
     has_work_permit: '无',
-    agent_contact: form.agent_id || '',
+agent_contact: buildAgentDisplay(),
+agent_contact_id: form.agent_contact_id || '',
+agent_company_id: form.agent_company_id || '',
+agent_company_name: form.agent_company_name || '',
+
     business_seq: 1,
     business_type: '',
     fee_visa: null,
@@ -624,7 +992,6 @@ const ensureDataFields = (data) => {
 const agentListData = ref([])
 const filteredAgentList = ref([])
 const agentSearchLoading = ref(false)
-const allContactOptions = ref([])
 const staffOptions = ref([])
 
 // ==================== 文件管理 ====================
@@ -637,7 +1004,6 @@ const fileState = reactive({
 })
 
 // ==================== 文件处理函数（修改为适配重构后的表格） ====================
-
 /**
  * 处理文件管理 - 适配重构后的表格组件
  */
@@ -650,7 +1016,6 @@ const handleFiles = (data) => {
 }
 
 // ==================== 新增：右键添加业务功能 ====================
-
 /**
  * 为指定客户添加业务
  */
@@ -678,7 +1043,7 @@ const addBusinessToCustomer = (customerId) => {
     entry_date: firstRow.entry_date || '',
     visa_expiry: firstRow.visa_expiry || '',
     has_work_permit: firstRow.has_work_permit || '无',
-    agent_contact: firstRow.agent_contact || form.agent_id || '',
+    agent_contact: firstRow.agent_contact || buildAgentDisplay(),
     business_type: '',
     fee_visa: null,
     fee_work: null,
@@ -711,15 +1076,7 @@ const addBusinessToCustomer = (customerId) => {
   ElMessage.success('已添加新业务行')
 }
 
-// ==================== 修改：文件上传识别功能 ====================
-
-/**
- * 处理批量文件上传 - 修复版
- */
-
-
 // ==================== 计算属性 ====================
-
 /**
  * 计算唯一客户数量
  */
@@ -739,10 +1096,6 @@ const uniqueCustomerCount = computed(() => {
 /**
  * 过滤联系人选项
  */
-const filteredContactOptions = computed(() => {
-  if (!form.agent_company) return allContactOptions.value
-  return allContactOptions.value.filter(opt => opt.company_name === form.agent_company)
-})
 
 /**
  * 计算应收合计
@@ -795,7 +1148,6 @@ const actualProfit = computed(() => {
 })
 
 // ==================== 代理相关方法 ====================
-
 /**
  * 搜索代理
  */
@@ -816,32 +1168,12 @@ const searchAgents = (query) => {
 /**
  * 处理代理公司变更
  */
-const handleAgentCompanyChange = () => {
-  form.agent_id = ''
-}
 
 /**
  * 同步代理联系人到所有行
  */
-const syncAgentToRows = (val) => { 
-  if (!form.customers || form.customers.length === 0) return
-  
-  const syncAgentToRows = (val) => {
-  if (!val) return
-
-  if (orderTableRef.value?.updateAgentContact) {
-    orderTableRef.value.updateAgentContact(val)
-  }
-}
-  
-  // 同时更新表格引用中的数据
-  if (orderTableRef.value && orderTableRef.value.updateAgentContact) {
-    orderTableRef.value.updateAgentContact(val)
-  }
-}
 
 // ==================== 订单编号相关 ====================
-
 /**
  * 更新订单编号
  */
@@ -859,7 +1191,6 @@ const handleDateChange = () => {
 }
 
 // ==================== 客户行操作方法 ====================
-
 /**
  * 添加新客户行
  */
@@ -893,34 +1224,74 @@ const updateCustomers = (newCustomers) => {
 /**
  * 为第一个客户添加业务
  */
- const addBusiness = () => {
+const addBusiness = () => {
   if (!orderTableRef.value?.addBusinessToActiveCustomer) {
     ElMessage.warning('表格未就绪，请稍后再试')
     return
   }
-
+  
   orderTableRef.value.addBusinessToActiveCustomer()
 }
 
-
 // ==================== 文件相关方法 ====================
-
 /**
  * 文件保存回调
  */
-const onFilesSaved = (files) => { 
-  if (fileState.rowId && form.customers) {
-    const updatedCustomers = [...form.customers]
-    const rowIndex = updatedCustomers.findIndex(row => row.id === fileState.rowId)
-    if (rowIndex !== -1) {
-      updatedCustomers[rowIndex].files = files
-      form.customers = updatedCustomers
-    }
-  }
+const onFilesSaved = (groups) => {
+  if (!fileState.rowId || !form.customers) return
+  
+  const rowIndex = form.customers.findIndex(
+    r => r.id === fileState.rowId
+  )
+  if (rowIndex === -1) return
+  
+  // 1. 展平分组
+  const flatFiles = []
+  groups.forEach(g => {
+    g.files.forEach(f => {
+      flatFiles.push({
+        ...f,
+        category: g.title
+      })
+    })
+  })
+  
+  // 2. 写回订单行
+  form.customers[rowIndex].files = flatFiles
+  
+  // 3. 文件中心 = 唯一权威接口
+  const center = db.getFiles()
+  
+  const safeOrderId = form.id || `TEMP_${form.order_no}`
+  
+  // 只移除当前订单 + 当前行的旧文件
+  const filtered = center.filter(f =>
+    !(String(f.orderId) === String(safeOrderId) &&
+      String(f.rowId) === String(fileState.rowId))
+  )
+  
+  // 标准化写入
+  const normalized = flatFiles.map(f =>
+    normalizeFileRecord(f, {
+      orderId: safeOrderId,
+      orderCode: form.order_no,
+      customerId: form.customers[rowIndex].customer_id,
+      customerName: form.customers[rowIndex].name || '',
+      rowId: fileState.rowId,
+      uploadedBy: form.service_staff || 'system'
+    })
+  )
+  
+  db.saveFiles([...filtered, ...normalized])
+  
+  console.log('📁 文件中心已同步', {
+    orderId: safeOrderId,
+    rowId: fileState.rowId,
+    count: normalized.length
+  })
 }
 
 // ==================== 导入导出相关 ====================
-
 /**
  * 格式化Excel日期
  */
@@ -953,7 +1324,7 @@ const formatExcelDate = (val) => {
  */
 const handleImport = (uploadFile) => {
   const reader = new FileReader()
-
+  
   reader.onload = async (e) => {
     try {
       const data = new Uint8Array(e.target.result)
@@ -962,60 +1333,60 @@ const handleImport = (uploadFile) => {
         workbook.Sheets[workbook.SheetNames[0]],
         { defval: "" }
       )
-
+      
       if (!json.length) {
         ElMessage.warning('导入文件为空')
         return
       }
-
+      
       // =========================
       // 构建导入数据
       // =========================
       const importedRows = []
-
+      
       json.forEach((row, rowIndex) => {
         const bTypeRaw = findValueByKeys(row, ['业务类型', 'Type'])
         let bTypes = bTypeRaw
           ? bTypeRaw.split(/[，,]/).map(t => t.trim()).filter(Boolean)
           : ['未指定业务']
-
+        
         const customerName =
           findValueByKeys(row, ['名字', '姓名', 'Name', '护照名']) ||
           `客户_${rowIndex + 1}`
-
+        
         const passportNo =
           findValueByKeys(row, ['护照号', '护照', 'Passport', 'No']) ||
           `passport_${rowIndex + 1}`
-
+        
         const aliasNo = findValueByKeys(row, ['化名', '员工编号', 'Alias', 'ID'])
-
+        
         bTypes.forEach((businessType, typeIndex) => {
           const directFees = parseFeeFields(row)
           const hasDirectFee = Object.values(directFees).some(v => v > 0)
-
+          
           let feeAllocation = directFees
-
+          
           if (!hasDirectFee) {
             const totalFee = Number(findValueByKeys(row, ['总费用', '费用', 'Fee'])) || 0
             const feePerBusiness = bTypes.length
               ? totalFee / bTypes.length
               : totalFee
-
+            
             feeAllocation = allocateFeeByBusinessType(
               businessType,
               feePerBusiness
             )
           }
-
+          
           const actualFee = Number(findValueByKeys(row, ['实收金额', '实收'])) || 0
           const upstreamFee =
             Number(findValueByKeys(row, ['上游端结算费用', '上游费用'])) || 0
-
+          
           const customerId = generateCustomerId({
             name: customerName,
             passport: passportNo
           })
-
+          
           importedRows.push({
             id: generateRowId(),
             customer_id: customerId,
@@ -1035,7 +1406,7 @@ const handleImport = (uploadFile) => {
             ),
             has_work_permit:
               findValueByKeys(row, ['劳工证', 'Work Permit']) || '无',
-            agent_contact: form.agent_id || '',
+            agent_contact: buildAgentDisplay(),
             business_type: businessType,
             ...feeAllocation,
             actual_fee: bTypes.length > 1
@@ -1068,12 +1439,12 @@ const handleImport = (uploadFile) => {
           })
         })
       })
-
+      
       if (!importedRows.length) {
         ElMessage.warning('未识别到可导入的数据')
         return
       }
-
+      
       // =========================
       // 覆盖 / 追加 选择弹窗
       // =========================
@@ -1111,18 +1482,90 @@ const handleImport = (uploadFile) => {
       ElMessage.error('导入失败，请检查文件格式')
     }
   }
-
+  
   reader.readAsArrayBuffer(uploadFile.raw)
 }
 
-
+const handleConvertOrder = async () => {
+  const cls = orderClass.value
+  const isHistoryNotify = cls === 'history-notify'
+  const isHistoryConfirmed = cls === 'history-confirmed'
+  
+  await ElMessageBox.confirm(
+    '该订单将生成一条新的订单，原订单将作为历史记录保留，是否继续？',
+    '转为新订单',
+    { type: 'warning' }
+  )
+  
+  const raw = db.getRaw('ORDERS') || []
+  const sourceIndex = raw.findIndex(o => String(o.id) === String(form.id))
+  if (sourceIndex === -1) return
+  
+  const source = raw[sourceIndex]
+  const now = new Date()
+  const today = todayStr()
+  
+  const newOrderId = 'ORD_' + now.getTime()
+  const prefix = `QX${today.replace(/-/g, '').substring(2)}`
+  const todayCount = raw.filter(o =>
+    (o.code || '').startsWith(prefix)
+  ).length
+  
+  const newCode = `${prefix}${String(todayCount + 1).padStart(4, '0')}`
+  
+  // 新订单
+  const newOrder = {
+    ...source,
+    id: newOrderId,
+    code: newCode,
+    created_at: today,
+    created_seq: Date.now(), // ✅ 新订单给新顺序
+    
+    // 新订单身份
+    order_type: isHistoryNotify ? 'notify' : 'confirmed',
+    confirmed_at: isHistoryConfirmed ? now.toISOString() : null,
+    
+    // 🔥 统一来源字段
+    source_order_id: source.id,
+    linked_order_id: null,
+    converted_at: null
+  }
+  
+  // 原订单 → 变成历史，只加关联，不改身份
+  const historyOrder = {
+    ...source,
+    linked_order_id: newOrderId,
+    converted_at: now.toISOString()
+  }
+  
+  raw[sourceIndex] = historyOrder
+  raw.unshift(newOrder)
+  
+  db.saveRaw('ORDERS', raw)
+  
+  ElMessage.success('新订单已生成')
+  
+  Object.assign(form, {
+    id: newOrderId,
+    order_type: newOrder.order_type,
+    source_order_id: newOrder.source_order_id,
+    linked_order_id: null,
+    created_at: today,
+    created_seq: source.created_seq || null, // ✅ 用 source
+  })
+  
+  router.push({
+    name: 'business.orders',
+    query: { id: newOrderId }
+  })
+}
 
 const parseFeeFields = (row) => {
   const num = (v) => {
     const n = Number(String(v).replace(/[^\d.-]/g, ''))
     return isNaN(n) ? 0 : n
   }
-
+  
   return {
     fee_visa: num(findValueByKeys(row, ['续签办理费', '签证费', 'Visa Fee'])),
     fee_work: num(findValueByKeys(row, ['劳工证办理费', '工作证费', 'Work Permit Fee'])),
@@ -1134,10 +1577,8 @@ const parseFeeFields = (row) => {
   }
 }
 
-
 /**
  * 工具函数：识别业务类型并分配到对应费用列
-
  */
 const allocateFeeByBusinessType = (businessType, feeData) => {
   const allocation = {
@@ -1307,7 +1748,6 @@ const calcRowTotal = (row) => {
 }
 
 // ==================== 打印功能 ====================
-
 /**
  * 处理打印
  */
@@ -1329,11 +1769,16 @@ const handlePrint = async () => {
 }
 
 // ==================== 表单提交 ====================
-
 /**
  * 提交表单
  */
 const submitForm = async () => {
+  // 只锁"历史通知订单"
+  if (!canEditOrder.value) {
+    ElMessage.warning('历史通知订单不可修改，请转为新订单')
+    return
+  }
+  
   if (!form.created_at) {
     ElMessage.warning('请选择下单日期')
     return
@@ -1344,15 +1789,19 @@ const submitForm = async () => {
     return
   }
   
-  if (!form.agent_id) {
-    ElMessage.warning('请选择代理联系人')
-    return
-  }
-  
   if (!form.service_staff) {
     ElMessage.warning('请选择或录入开单客服')
     return
   }
+  if (!form.agent_contact_id) {
+  ElMessage.warning('请选择代理联系人')
+  return
+}
+
+if (!form.agent_company_id) {
+  ElMessage.error('代理公司缺失：请重新选择代理联系人')
+  return
+}
   
   const allOrders = db.getRaw('ORDERS') || []
   if (allOrders.some(o => o.code === form.order_no && o.id !== form.id)) {
@@ -1368,26 +1817,59 @@ const submitForm = async () => {
   
   saving.value = true
   try {
-    const agents = db.getAgents() || []
-    const currentAgent = agents.find(a => a.name === form.agent_company)
-    const snapRate = currentAgent && currentAgent.commission_rate !== undefined ? currentAgent.commission_rate : 10
+const snapRate = 10
+
     
 const payload = {
-  ...normalizeOrderForSave(form),
+  ...normalizeOrderForSave({
+    ...form,
+    customers: form.customers.map(r => ({ ...r, files: [] }))
+  }),
+
   id: form.id || Date.now(),
-  agent_commission_rate: snapRate,
-  commission_settled: false,
-  deleted: false,
-  deleted_at: null
-}
+  created_seq: form.created_seq || Date.now(),
+
+  // ✅ 企业标准：写入 4 字段
+  agent_contact_id: form.agent_contact_id,
+  agent_contact_name: form.agent_contact_name,
+  agent_company_id: form.agent_company_id,
+  agent_company_name: form.agent_company_name,
+      
+      source_order_id: form.source_order_id || null,
+      linked_order_id: form.linked_order_id || null,
+      converted_at: form.converted_at || null,
+      confirmed_at: form.confirmed_at || null,
+      
+      agent_commission_rate: snapRate,
+      commission_settled: false,
+      deleted: false,
+      deleted_at: null
+    }
     
     const updatedOrders = form.id ? 
       allOrders.map(o => o.id === form.id ? payload : o) : 
       [payload, ...allOrders]
     
     db.saveRaw('ORDERS', updatedOrders)
-    ElMessage.success(isEditMode.value ? '订单修改成功' : '新订单创建成功')
     
+    // 🔥 把数据库ID同步回表单
+    form.id = payload.id
+    // 🔥 回填文件中心临时订单ID（统一走文件中心接口）
+    const files = db.getFiles()
+    
+    const fixed = files.map(f => {
+      if (f.orderId === `TEMP_${form.order_no}`) {
+        return {
+          ...f,
+          orderId: payload.id
+        }
+      }
+      return f
+    })
+    
+    db.saveFiles(fixed)
+    
+    ElMessage.success(isEditMode.value ? '订单修改成功' : '新订单创建成功')
     router.push({ name: 'business.orders' })
   } catch (error) {
     console.error('保存失败:', error)
@@ -1396,31 +1878,67 @@ const payload = {
     saving.value = false 
   }
 }
+
 const loadOrderById = (id) => {
   const orders = db.getRaw('ORDERS') || []
   const order = orders.find(o => String(o.id) === String(id))
-
+  
   if (!order) {
     ElMessage.error('订单不存在或已被删除')
     return
   }
-
+  
   Object.assign(form, {
     id: order.id,
     order_no: order.code,
     created_at: order.created_at,
-    agent_company: order.agent_company || '',
-    agent_id: order.agent_contact || '',
+    
+agent_company_id: order.agent_company_id ?? null,
+agent_company_name: order.agent_company_name || '',
+
+agent_contact_id: order.agent_contact_id || '',
+agent_contact_name: order.agent_contact_name || '',
+
     service_staff: order.service_staff || '',
     remark: order.remark || '',
+    
     status: order.status || 'Pending',
+    order_type: order.order_type || 'notify',
+    
+    // 🔥 统一来源字段
+    source_order_id: order.source_order_id || null,
+    linked_order_id: order.linked_order_id || null,
+    converted_at: order.converted_at || null,
+    confirmed_at: order.confirmed_at || null,
+    
     customers: ensureDataFields(order.customers || [])
+  })
+  // 如果只存在 contact_id（老数据），尝试从联系人表补齐公司/name
+if (form.agent_contact_id && (!form.agent_company_id || !form.agent_company_name || !form.agent_contact_name)) {
+  handleAgentContactChange(form.agent_contact_id)
+}
+syncAgentToRows()
+}
+
+const goToStaffManage = () => {
+  router.push({
+    name: 'settings.serviceStaff',
+    query: {
+      from: 'create-order'
+    }
   })
 }
 
+const goToAgentManage = () => {
+  router.push({
+    name: 'agent.index',
+    query: {
+      from: 'create-order'
+    }
+  })
+}
 
 // ==================== 初始化数据 ====================
-
 /**
  * 加载数据
  */
@@ -1429,21 +1947,27 @@ const loadData = () => {
   agentListData.value = agents
   filteredAgentList.value = agents
   
-  staffOptions.value = db.getRaw('STAFF_LIST') || []
+  // 🔥 实时拉取客服列表（页面级真理源）
+  loadStaffOptions()
   
-  const contactCollector = []
-  agents.forEach(a => {
-    if (a.contacts && Array.isArray(a.contacts)) {
-      a.contacts.forEach(con => {
-        contactCollector.push({ 
-          unique_key: `${a.id}-${con.name}`, 
-          display_label: `${a.name} - ${con.name}`,
-          company_name: a.name 
-        })
-      })
-    }
+const contactCollector = []
+
+agents.forEach(company => {
+  ;(company.contacts || []).forEach(con => {
+    // ✅ 联系人ID统一规则（你现在其实已经在用这个规则）
+    const contactId = `${company.id}_${con.name}`
+
+    contactCollector.push({
+      id: contactId,
+      name: con.name,
+      company_id: company.id,
+      company_name: company.name
+    })
   })
-  allContactOptions.value = contactCollector
+})
+
+
+contactOptions.value = contactCollector
   
   if (route.query.staffName) {
     form.service_staff = route.query.staffName
@@ -1460,30 +1984,68 @@ const loadData = () => {
   }
 }
 
-// ==================== 生命周期 ====================
+// 页面从别的路由切回来时刷新
+if (!staffHookRegistered) {
+  router.afterEach(() => {
+    loadStaffOptions()
+  })
+  staffHookRegistered = true
+}
 
+window.addEventListener('focus', loadStaffOptions)
+
+// ==================== 生命周期 ====================
 onMounted(() => {
   loadData()
+  // ===============================
+  // ⭐ 多租户：代理自动锁定公司
+  // ===============================
+  if (currentUser?.role === 'agent') {
+    const agents = db.getAgents()
+    const myCompany = agents.find(
+      a => String(a.id) === String(currentUser.agent_company_id)
+    )
+    
+    if (myCompany) {
+form.agent_company_id = myCompany.id
+form.agent_company_name = myCompany.name
 
+// 你现有系统里 currentUser.id 就当作 contact_id 使用（保持一致）
+form.agent_contact_id = currentUser.id
+form.agent_contact_name = currentUser.name
+      
+      nextTick(() => {
+        form.agent_company_locked = true
+      })
+    }
+  }
+  
   // 编辑模式
-if (route.query.id) {
-  isEditMode.value = true
-  loadOrderById(route.query.id)
-} else {
+  if (route.query.id) {
+    isEditMode.value = true
+    loadOrderById(route.query.id)
+  } else {
     // 新建模式
     if (!form.order_no) updateOrderNo()
     if (!form.customers.length) addRow()
   }
-
+  
   nextTick(() => {
     console.log('OrderTable ref:', orderTableRef.value)
     if (orderTableRef.value) {
       console.log('表格组件已正确加载')
     }
-	nextTick(() => {
-  formSnapshot = JSON.stringify(form)
-})
+    nextTick(() => {
+      formSnapshot = JSON.stringify(form)
+    })
   })
+  // ===============================
+  // 代理禁止编辑订单
+  // ===============================
+  if (currentUser?.role === 'agent' && route.query.id) {
+    ElMessage.error('代理账号不允许编辑订单')
+    router.push({ name: 'business.orders' })
+  }
 })
 
 watch(
@@ -1493,6 +2055,46 @@ watch(
   },
   { deep: true }
 )
+
+watch(
+  () => route.query.id,
+  (newId, oldId) => {
+    if (!newId || newId === oldId) return
+    
+    // 🔥 切换为编辑模式
+    isEditMode.value = true
+    
+    // 🔥 清空表单
+    Object.assign(form, {
+      id: null,
+      order_no: '',
+      created_at: '',
+      agent_company: '',
+      agent_id: '',
+      service_staff: '',
+      remark: '',
+      customers: [],
+      order_type: 'notify',
+      status: 'Draft',
+      source_order_id: null,
+      linked_order_id: null,
+      converted_at: null,
+      confirmed_at: null
+    })
+    
+    // 🔥 加载新订单
+    nextTick(() => {
+      loadOrderById(newId)
+      formSnapshot = JSON.stringify(form)
+      isDirty.value = false
+    })
+  }
+)
+
+const isHistoryNotifyOrder = () => {
+  return orderClass.value === 'history-notify'
+}
+
 const handleCreateNew = () => {
   const doReset = () => {
     // 重置表单
@@ -1500,14 +2102,26 @@ const handleCreateNew = () => {
       id: null,
       order_no: '',
       created_at: new Date().toISOString().split('T')[0],
-      agent_company: '',
-      agent_id: '',
+      
+agent_company_id: null,
+agent_company_name: '',
+agent_contact_id: '',
+agent_contact_name: '',
+
       service_staff: '',
       remark: '',
+      customers: [],
+      
       status: 'Pending',
-      customers: []
+      
+      // 🔥 身份必须重置
+      order_type: 'notify',
+      source_order_id: null,
+      linked_order_id: null,
+      converted_at: null,
+      confirmed_at: null
     })
-
+    
     // 生成新订单号 + 默认一行
     nextTick(() => {
       updateOrderNo()
@@ -1517,10 +2131,10 @@ const handleCreateNew = () => {
       formSnapshot = JSON.stringify(form)
       isDirty.value = false
     })
-
+    
     ElMessage.success('已新建空白订单')
   }
-
+  
   if (isDirty.value) {
     ElMessageBox.confirm(
       '当前订单尚未保存，是否放弃修改并新建订单？',
@@ -1531,34 +2145,95 @@ const handleCreateNew = () => {
     doReset()
   }
 }
-
-
-
 </script>
 
 <style scoped>
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.title-text {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.title-badge {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.title-badge.history {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.title-badge.confirmed {
+  background: #1d4ed8;
+  color: white;
+}
+
+.title-badge.notify {
+  background: #f59e0b;
+  color: #1f2933;
+}
+
+.order-status-bar {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.status {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.status.history {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5f5;
+}
+
+.status.confirmed {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #93c5fd;
+}
+
+.status.notify {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
 .create-order-page { 
-  height: 100%; 
+  height: 100%;
+  min-height: 0;  
   display: flex; 
   flex-direction: column; 
   position: relative; 
 }
 
-.page-content-wrapper { 
-  position: absolute; 
-  top: 0; 
-  left: 0; 
-  right: 0; 
-  bottom: 0; 
-  display: flex; 
-  flex-direction: column; 
+.logic-flex-wrapper { 
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0; /* 🔥 滚动生死线 */
 }
 
-.logic-flex-wrapper { 
-  flex: 1; 
-  display: flex; 
-  flex-direction: column; 
-  overflow: hidden; 
+.page-content-wrapper {
+  flex: 1;
+  height: 100%;     /* 🔥 必须补这一句 */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;   /* 🔥 关键：不要让外层滚 */
 }
 
 .top-settings-bar { 
@@ -1586,10 +2261,11 @@ const handleCreateNew = () => {
   gap: 10px;
 }
 
-.table-main-area { 
-  flex: 1; 
-  overflow: hidden; 
-  background: #fff; 
+.table-main-area {
+  flex: 1;            /* 🔥 关键 */
+  min-height: 0;      /* 🔥 关键 */
+  overflow: hidden;   /* 🔥 关键：滚动交给表格内部 */
+  display: flex;      /* 🔥 关键：让 OrderTable 撑满 */
 }
 
 .footer-black-bar { 
@@ -1726,9 +2402,41 @@ const handleCreateNew = () => {
   color: #2563eb; 
 }
 
-:deep(.page-body) { 
-  height: 100% !important; 
-  overflow: hidden !important; 
-  position: relative; 
+.order-table-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.staff-select-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.staff-manage-btn {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+
+.staff-manage-btn:hover {
+  background: #e0f2fe;
+  border-color: #38bdf8;
+}
+
+.field-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-input-wrapper {
+  min-width: 220px;
 }
 </style>
