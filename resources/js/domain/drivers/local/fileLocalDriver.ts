@@ -22,14 +22,21 @@ export class FileLocalDriver implements FileRepository {
 
       orderId: input.orderId,
       orderCode: input.orderCode,
-      customerName: input.customerName,
-      agentContact: input.agentContact,
+customerName: input.customerName,
+
+// ⭐企业版代理字段（只认新字段）
+agent_company_id: input.agent_company_id || '',
+agent_company_name: input.agent_company_name || '',
+agent_contact_id: input.agent_contact_id || '',
+agent_contact_name: input.agent_contact_name || '',
+
 
       fileType: input.fileType,
       mimeType: input.mimeType,
       size: input.size,
 
-      dataUrl: input.dataUrl,
+      dataUrl: '', 
+blob: input.blob,
       url: '',
 
       uploadedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
@@ -61,4 +68,48 @@ export class FileLocalDriver implements FileRepository {
     // LocalDriver 不负责 restore
     // restore 由 recycleService + adapter 完成
   }
+  async getStatsBundle() {
+  const list = db.getFiles() || []
+
+  const agentSet = new Set<string>()
+  const catMap = new Map<string, number>()
+  const typeMap = new Map<string, number>()
+
+  const today = new Date().toISOString().slice(0, 10)
+  let todayCount = 0
+  let brokenCount = 0
+
+  for (const f of list) {
+    const label = [f.agent_company_name, f.agent_contact_name].filter(Boolean).join(' - ').trim()
+    if (label) agentSet.add(label)
+
+    const cat = f.category || '未分类'
+    catMap.set(cat, (catMap.get(cat) || 0) + 1)
+
+    const ft = f.fileType || 'other'
+    typeMap.set(ft, (typeMap.get(ft) || 0) + 1)
+
+    if (String(f.uploadedAt || '').startsWith(today)) todayCount++
+    if (!f.dataUrl && String(f.url || '').startsWith('blob:')) brokenCount++
+  }
+
+  const categories = Array.from(catMap.entries()).map(([key, count]) => ({
+    id: key,
+    label: `${key} (${count})`,
+    key,
+    count
+  }))
+
+  return {
+    agents: Array.from(agentSet).sort((a, b) => a.localeCompare(b)),
+    categories,
+    global: {
+      todayCount,
+      brokenCount,
+      typeStats: Array.from(typeMap.entries()).map(([key, count]) => ({ key, count }))
+    }
+  }
+}
+
+  
 }

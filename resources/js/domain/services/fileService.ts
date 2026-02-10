@@ -25,12 +25,19 @@ const buildSnapshot = (file: FileRecord) => ({
   orderId: file.orderId,
   orderCode: file.orderCode,
   customerName: file.customerName,
-  agentContact: file.agentContact,
+
+  // ⭐正式代理模型
+  agent_company_id: file.agent_company_id,
+  agent_company_name: file.agent_company_name,
+  agent_contact_id: file.agent_contact_id,
+  agent_contact_name: file.agent_contact_name,
+
   size: file.size,
   uploadedAt: file.uploadedAt,
   uploadedBy: file.uploadedBy,
   fileType: file.fileType
 })
+
 // ==================================================
 // Service
 // ==================================================
@@ -83,9 +90,19 @@ async restore(snapshot: FileRecord): Promise<void> {
   // =========================
   // 创建 / 上传
   // =========================
-  async upload(input: CreateFileInput): Promise<FileRecord> {
-    return repository.create(input)
-  },
+async upload(input: CreateFileInput): Promise<FileRecord> {
+  // ⭐企业版：统一写入代理冗余字段
+  const record: CreateFileInput = {
+    ...input,
+
+    agent_company_id: input.agent_company_id || '',
+    agent_company_name: input.agent_company_name || '',
+    agent_contact_id: input.agent_contact_id || '',
+    agent_contact_name: input.agent_contact_name || ''
+  }
+
+  return repository.create(record)
+},
 
   // =========================
   // 更新
@@ -207,5 +224,68 @@ async restore(snapshot: FileRecord): Promise<void> {
     }
 
     return ''
+  },
+  async getAgentOptions() {
+  return repository.getAgentOptions()
+},
+
+async getCategoryStats() {
+  return repository.getCategoryStats()
+},
+
+async getGlobalStats() {
+  return repository.getGlobalStats()
+},
+// ✅ 新增：一次性拿到全部统计（优先走 repository.getStatsBundle）
+async getStatsBundle() {
+  const repo: any = repository
+
+  if (typeof repo.getStatsBundle === 'function') {
+    return repo.getStatsBundle()
   }
+
+  // fallback：老仓储没实现 bundle，就退化成 3 次（但我们后面会让 driver 实现）
+  const [agents, categories, global] = await Promise.all([
+    repo.getAgentOptions?.() ?? Promise.resolve([]),
+    repo.getCategoryStats?.() ?? Promise.resolve([]),
+    repo.getGlobalStats?.() ?? Promise.resolve({ todayCount: 0, brokenCount: 0, typeStats: [] })
+  ])
+
+  return { agents, categories, global }
+},
+
+// ✅ 旧接口兼容：全部从 bundle 取，避免重复扫库
+async getAgentOptions() {
+  const b = await this.getStatsBundle()
+  return b.agents
+},
+
+async getCategoryStats() {
+  const b = await this.getStatsBundle()
+  return b.categories
+},
+
+async getGlobalStats() {
+  const b = await this.getStatsBundle()
+  return b.global
+},
+// =========================
+// 按订单读取（只取元数据）
+// 专供 Drawer 使用（避免全库读取）
+// =========================
+async listByOrder(orderId?: string, orderCode?: string) {
+  const res = await this.listPaged({
+    page: 1,
+    pageSize: 9999,
+    filters: {
+      orderCode: orderCode || '',
+    }
+  })
+
+  // 再过滤 orderId（兼容旧数据）
+  return (res.items || []).filter(f =>
+    String(f.orderId || '') === String(orderId || '') ||
+    String(f.orderCode || '') === String(orderCode || '')
+  )
+},
 }

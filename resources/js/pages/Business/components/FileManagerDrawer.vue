@@ -104,13 +104,7 @@ import { fileService } from '@/domain/services/fileService'
 
 
 // ===== 文件读取 =====
-const readFileAsDataURL = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(new Error('读取文件失败'))
-    reader.readAsDataURL(file)
-  })
+
 
 const detectFileType = (mime = '', name = '') => {
   const m = String(mime).toLowerCase()
@@ -175,15 +169,24 @@ const groupByCategory = (files) => {
 }
 
 // 🟢 ADD：从 fileService 读取（IndexedDB / API 都走这里）
-const loadFromCenter = async () => {
-  const all = (await fileService.list()) || []
+// 替换原来的：const all = await fileService.list()
 
+const loadFromCenter = async () => {
   const orderId = String(props.orderData?.id || '')
   const orderCode = String(props.orderData?.order_no || props.orderData?.code || '')
 
-  const scoped = all.filter(f =>
-    String(f.orderId || '') === orderId ||
-    String(f.orderCode || '') === orderCode
+  const res = await fileService.listPaged({
+    page: 1,
+    pageSize: 500, // 当前订单不会太多，给大点
+    sortBy: 'time_desc',
+    filters: {
+      orderCode: orderCode,
+      // 或者你加一个 orderId filter（如果 driver 支持）
+    }
+  })
+
+  const scoped = (res.items || []).filter(f =>
+    String(f.orderId || '') === orderId || String(f.orderCode || '') === orderCode
   )
 
   localGroups.value = groupByCategory(scoped)
@@ -196,36 +199,37 @@ const handleUpload = async (file, gIdx) => {
   if (!raw) return
 
   try {
-    const dataUrl = await readFileAsDataURL(raw)
-
-        // 🟢 ADD：上传统一走 fileService（不再写 localStorage）
     await fileService.upload({
       name: raw.name,
-
       category: localGroups.value[gIdx]?.title || '',
 
       orderId: props.orderData?.id || '',
       orderCode: props.orderData?.order_no || props.orderData?.code || '',
       customerName: props.customerData?.name || '',
 
-      agentContact: '', // Drawer 里暂时没有这个字段
+      agent_company_id: props.orderData?.agent_company_id || '',
+      agent_company_name: props.orderData?.agent_company_name || '',
+      agent_contact_id: props.orderData?.agent_contact_id || '',
+      agent_contact_name: props.orderData?.agent_contact_name || '',
 
       fileType: detectFileType(raw.type, raw.name),
       mimeType: raw.type,
       size: raw.size,
 
-      dataUrl,
+      // ⭐⭐⭐ 改这里：不再用 dataUrl
+      blob: raw,
+
       uploadedBy: '当前用户'
     })
-
 
     await loadFromCenter()
     ElMessage.success(`已上传：${raw.name}`)
   } catch (e) {
     console.error(e)
-    ElMessage.error('上传失败，可能是文件过大或存储容量不足')
+    ElMessage.error('上传失败')
   }
 }
+
 
 // ===== 操作 =====
 const renameFile = (file) => {

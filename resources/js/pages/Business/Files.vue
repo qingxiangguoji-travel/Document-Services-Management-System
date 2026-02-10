@@ -4,7 +4,7 @@
     <template #title>业务文件中心</template>
     <template #subtitle>
       统一管理客户 / 订单 / 业务相关文件资料
-      <span class="muted">（总数 {{ filteredFiles.length }}，今日上传 {{ todayCount }}）</span>
+      <span class="muted">（总数 {{ pagedResult.total }}，今日上传 {{ todayCount }}）</span>
     </template>
 
     <!-- ================= 操作区 ================= -->
@@ -188,7 +188,7 @@
 
         <div class="stat-row">
           <div class="stat-k">当前筛选</div>
-          <div class="stat-v">{{ filteredFiles.length }}</div>
+          <div class="stat-v">{{ pagedResult.total }}</div>
         </div>
         <div class="stat-row">
           <div class="stat-k">已选中</div>
@@ -318,11 +318,18 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="代理联系人" width="140">
-          <template #default="scope">
-            <span>{{ scope.row.agentContact || '-' }}</span>
-          </template>
-        </el-table-column>
+<el-table-column label="代理" width="180">
+  <template #default="scope">
+    <span>
+      {{
+        [scope.row.agent_company_name, scope.row.agent_contact_name]
+          .filter(Boolean)
+          .join(' - ') || '-'
+      }}
+    </span>
+  </template>
+</el-table-column>
+
 
         <el-table-column label="订单号" width="180">
           <template #default="scope">
@@ -418,7 +425,7 @@
         v-model:page-size="pageSize"
         :page-sizes="[20, 50, 100]"
         layout="total, sizes, prev, pager, next"
-        :total="filteredFiles.length"
+        :total="pagedResult.total"
       />
     </template>
   </TablePageLayout>
@@ -431,10 +438,6 @@
 
         <el-form-item label="客户">
           <el-input v-model="uploadForm.customerName" disabled />
-        </el-form-item>
-
-        <el-form-item label="代理联系人">
-          <el-input v-model="uploadForm.agentContact" placeholder="可选：用于统计筛选" />
         </el-form-item>
 
         <el-form-item label="分类">
@@ -538,7 +541,7 @@
 <script setup>
 import { reactive } from 'vue'
 import { saveAs } from 'file-saver'
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -559,7 +562,6 @@ import { fileService } from '@/domain/services/fileService'
 import { db } from '@/utils/storage'
 
 
-
 const buildFileSnapshot = (file) => ({
   id: file.id,
   name: file.name,
@@ -568,7 +570,11 @@ const buildFileSnapshot = (file) => ({
   orderId: file.orderId,
   orderCode: file.orderCode,
   customerName: file.customerName,
-  agentContact: file.agentContact,
+
+  // ⭐新代理模型
+  agent_company_name: file.agent_company_name || '',
+  agent_contact_name: file.agent_contact_name || '',
+
   size: file.size,
   uploadedAt: file.uploadedAt,
   uploadedBy: file.uploadedBy,
@@ -576,16 +582,19 @@ const buildFileSnapshot = (file) => ({
 })
 
 
+let filterTimer = null
+const triggerFilterSearch = () => {
+  clearTimeout(filterTimer)
+  filterTimer = setTimeout(() => {
+    currentPage.value = 1
+    loadFiles()
+  }, 300)
+}
+
+
+
 const router = useRouter()
 const route = useRoute()
-const agentContactOptions = computed(() => {
-  const set = new Set()
-  ;(rawFiles.value || []).forEach(f => {
-    const v = String(f.agentContact || '').trim()
-    if (v) set.add(v)
-  })
-  return Array.from(set).sort((a, b) => a.localeCompare(b))
-})
 
 
 const clipboard = reactive({
@@ -766,10 +775,38 @@ const uploadForm = ref({
   orderId: '',
   orderCode: '',
   customerName: '',
-  agentContact: ''
+  agent_company_name: '',
+  agent_contact_name: ''
 })
 
-const rawFiles = ref([])
+const pagedResult = ref({
+  items: [],
+  total: 0
+})
+
+const filteredFiles = computed(() => pagedResult.value.items)
+const pagedFiles = computed(() => pagedResult.value.items)
+
+// ===== 数据库统计状态 =====
+const todayCount = ref(0)
+const brokenCount = ref(0)
+const agentContactOptions = ref([])
+const categoryTreeWithCount = ref([])
+const typeStats = ref([])
+const topCategoryStats = ref([])
+
+const loadStats = async () => {
+  const b = await fileService.getStatsBundle()
+
+  agentContactOptions.value = b.agents
+  categoryTreeWithCount.value = b.categories
+  typeStats.value = b.global.typeStats
+  todayCount.value = b.global.todayCount
+  brokenCount.value = b.global.brokenCount
+  topCategoryStats.value = b.categories
+}
+
+
 
 // el-upload 选中的文件列表（用于显示）
 const uploadRef = ref(null)
@@ -860,13 +897,20 @@ const normalizeCenterFile = (f, orderIndexMap) => {
     (String(f.url || '').startsWith('blob:'))
 
   // 尝试补全 agentContact：优先文件自身字段；否则通过 orderId/orderCode 查订单
-  let agentContact = f.agentContact || f.agent_contact || ''
-  if (!agentContact) {
-    const key = String(f.orderId || f.orderCode || '').trim()
-    if (key && orderIndexMap?.has(key)) {
-      agentContact = orderIndexMap.get(key) || ''
-    }
+// ⭐企业正式版：代理信息标准化
+let agent_company_name = f.agent_company_name || ''
+let agent_contact_name = f.agent_contact_name || ''
+
+// 如果文件没有代理 → 从订单补全
+if (!agent_contact_name) {
+  const key = String(f.orderId || f.orderCode || '').trim()
+  if (key && orderIndexMap?.has(key)) {
+    const agent = orderIndexMap.get(key)
+    agent_company_name = agent?.company || ''
+    agent_contact_name = agent?.contact || ''
   }
+}
+
 
   return {
     id: f.id,
@@ -891,7 +935,8 @@ const normalizeCenterFile = (f, orderIndexMap) => {
     uploadedBy: f.uploadedBy || 'system',
 
     // 统计筛选维度
-    agentContact,
+agent_company_name,
+agent_contact_name,
 
     // UI增强字段
     previewUrl,
@@ -916,7 +961,8 @@ const clearAllFilters = () => {
 const jumpToRestoredFile = async (fileId) => {
   if (!fileId) return
 
-  await loadFiles()
+  await Promise.all([loadFiles(), loadStats()])
+
   clearAllFilters()
 
   await nextTick()
@@ -942,49 +988,50 @@ const jumpToRestoredFile = async (fileId) => {
 }
 
 
+
+
 // ================= 数据加载 =================
 const loadFiles = async () => {
-  const orders = tryGetOrders()
-  const orderIndexMap = new Map()
+  const res = await fileService.listPaged({
+    page: currentPage.value,
+    pageSize: pageSize.value,
+    sortBy: sortBy.value,
+    filters: filters.value
+  })
 
-  for (const o of orders || []) {
-    const agent = o.agent_contact || o.agentContact || ''
-    const id = o.id != null ? String(o.id) : ''
-    const code = o.order_no || o.orderCode || o.order_no_display || ''
-    if (id) orderIndexMap.set(id, agent)
-    if (code) orderIndexMap.set(String(code), agent)
+  // ✅ 关键：把分页结果补齐 previewUrl/_broken/fileType
+  const normalized = res.items.map(f => {
+    const fileType = f.fileType || detectFileType(f.mimeType, f.name)
+    const previewUrl = buildPreviewUrl(f)
+
+    const broken =
+      (!f.dataUrl || !String(f.dataUrl).startsWith('data:')) &&
+      String(f.url || '').startsWith('blob:')
+
+    return {
+      ...f,
+      fileType,
+      previewUrl,
+      _broken: broken || !previewUrl
+    }
+  })
+
+  pagedResult.value = {
+    total: res.total,
+    items: normalized
   }
-
-  const raw = await fileService.list()
-  rawFiles.value = raw.map((x) => normalizeCenterFile(x, orderIndexMap))
 }
 
-// ================= 分类树 =================
-const categoryTreeWithCount = computed(() => {
-  const countByCat = rawFiles.value.reduce((m, f) => {
-    const c = f.category || '未分类'
-    m[c] = (m[c] || 0) + 1
-    return m
-  }, {})
 
-  const allCats = new Set([...SYSTEM_CATEGORIES, ...Object.keys(countByCat)])
-  return Array.from(allCats).map((c) => ({
-    id: c,
-    label: `${c} (${countByCat[c] || 0})`
-  }))
-})
+// ================= 分类树 =================
+
 
 const flatCategories = computed(() =>
   categoryTreeWithCount.value.map((n) => String(n.label).replace(/\s*\(.*\)$/, ''))
 )
 
 // ================= 统计 =================
-const todayCount = computed(() => {
-  const today = new Date().toISOString().slice(0, 10)
-  return rawFiles.value.filter((f) => String(f.uploadedAt || '').startsWith(today)).length
-})
 
-const brokenCount = computed(() => rawFiles.value.filter((f) => f._broken).length)
 
 const buildCount = (list, keyFn) => {
   const m = new Map()
@@ -997,9 +1044,6 @@ const buildCount = (list, keyFn) => {
     .sort((a, b) => b.count - a.count)
 }
 
-const topCategoryStats = computed(() => buildCount(filteredFiles.value, (f) => f.category).slice(0, 8))
-const typeStats = computed(() => buildCount(filteredFiles.value, (f) => f.fileType))
-
 // ================= 过滤 + 排序 =================
 const inDateRange = (uploadedAt, range) => {
   if (!range || !range.length) return true
@@ -1009,33 +1053,23 @@ const inDateRange = (uploadedAt, range) => {
   return d >= start && d <= end
 }
 
-const filteredFiles = computed(() => {
-  let list = rawFiles.value.filter((f) => {
-    if (filters.value.keyword && !String(f.name || '').includes(filters.value.keyword)) return false
-    if (filters.value.customer && !String(f.customerName || '').includes(filters.value.customer)) return false
-    if (filters.value.orderCode && !String(f.orderCode || '').includes(filters.value.orderCode)) return false
-    if (filters.value.agentContact && !String(f.agentContact || '').includes(filters.value.agentContact)) return false
-    if (filters.value.category && f.category !== filters.value.category) return false
-    if (filters.value.fileType && f.fileType !== filters.value.fileType) return false
-    if (!inDateRange(f.uploadedAt, filters.value.dateRange)) return false
-    return true
-  })
-
-  if (sortBy.value === 'time_desc') list.sort((a, b) => String(b.uploadedAt).localeCompare(String(a.uploadedAt)))
-  if (sortBy.value === 'time_asc') list.sort((a, b) => String(a.uploadedAt).localeCompare(String(b.uploadedAt)))
-  if (sortBy.value === 'name') list.sort((a, b) => String(a.name).localeCompare(String(b.name)))
-  if (sortBy.value === 'customer') list.sort((a, b) => String(a.customerName).localeCompare(String(b.customerName)))
-
-  return list
-})
-
-const pagedFiles = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredFiles.value.slice(start, start + pageSize.value)
-})
 
 // ================= 行为 =================
-const handleSearch = () => (currentPage.value = 1)
+
+watch([currentPage, pageSize, sortBy], () => loadFiles())
+
+watch(
+  filters,
+  () => triggerFilterSearch(),
+  { deep: true }
+)
+
+
+const handleSearch = () => {
+  currentPage.value = 1
+  loadFiles()
+}
+
 
 const resetFilters = () => {
   filters.value = {
@@ -1065,7 +1099,9 @@ const openUpload = async () => {
     uploadForm.value.orderId = route.query.orderId || ''
     uploadForm.value.orderCode = route.query.orderCode || ''
     uploadForm.value.customerName = route.query.customerName || ''
-    uploadForm.value.agentContact = route.query.agentContact || ''
+uploadForm.value.agent_company_name = route.query.agentCompany || ''
+uploadForm.value.agent_contact_name = route.query.agentContact || ''
+
 
     pickedFileList.value = []
     uploadVisible.value = true
@@ -1102,14 +1138,28 @@ const commitUpload = async () => {
       const dataUrl = await readFileAsDataURL(raw)
       const fileType = detectFileType(raw.type, raw.name)
 
-      await fileService.upload({
-        name: raw.name,
-        category: uploadForm.value.category,
+// ⭐从订单自动补全代理（正式版）
+const orders = tryGetOrders()
 
-        orderId: uploadForm.value.orderId || '',
-        orderCode: uploadForm.value.orderCode || '',
-        customerName: uploadForm.value.customerName || '',
-        agentContact: uploadForm.value.agentContact || '',
+const order = orders.find(o =>
+  String(o.id) === String(uploadForm.value.orderId) ||
+  String(o.order_no || o.orderCode || '') === String(uploadForm.value.orderCode)
+)
+
+await fileService.upload({
+  name: raw.name,
+  category: uploadForm.value.category,
+
+  orderId: uploadForm.value.orderId || '',
+  orderCode: uploadForm.value.orderCode || '',
+  customerName: uploadForm.value.customerName || '',
+
+  // ⭐企业正式版代理字段（最终形态）
+  agent_company_id: order?.agent_company_id || '',
+  agent_company_name: order?.agent_company_name || '',
+  agent_contact_id: order?.agent_contact_id || '',
+  agent_contact_name: order?.agent_contact_name || '',
+
 
         fileType,
         mimeType: raw.type,
@@ -1122,7 +1172,8 @@ const commitUpload = async () => {
 
     pickedFileList.value = []
     uploadVisible.value = false
-    await loadFiles()
+    await Promise.all([loadFiles(), loadStats()])
+
     ElMessage.success('上传成功（已永久保存）')
   } catch (e) {
     // localStorage 容量不足最常见
@@ -1170,7 +1221,8 @@ const deleteFile = (file) => {
     try {
       // 🟢 ADD：删除统一走 fileService（内部会 softDelete + repository.delete）
       await fileService.delete(file, '管理员')
-      await loadFiles()
+      await Promise.all([loadFiles(), loadStats()])
+
       ElMessage.success('已移入回收站')
     } catch (e) {
       console.error('🔴 DELETE ERROR', e)
@@ -1193,7 +1245,8 @@ const handleBatchDelete = () => {
       await fileService.batchDelete(selectedFiles.value, '管理员')
 
       selectedFiles.value = []
-      await loadFiles()
+      await Promise.all([loadFiles(), loadStats()])
+
 
       ElMessage.success('已批量移入回收站')
     } catch (e) {
@@ -1225,7 +1278,8 @@ const confirmMove = async () => {
 
     moveVisible.value = false
     selectedFiles.value = []
-    await loadFiles()
+    await Promise.all([loadFiles(), loadStats()])
+
     ElMessage.success('分类已更新')
   } catch (e) {
     console.error(e)
@@ -1249,7 +1303,8 @@ const clearBrokenFiles = () => {
   ).then(async () => {
     try {
       const removed = await fileService.clearBroken()
-      await loadFiles()
+      await Promise.all([loadFiles(), loadStats()])
+
       ElMessage.success(`已清理 ${removed} 个失效文件`)
     } catch (e) {
       console.error(e)
@@ -1300,7 +1355,10 @@ const typeLabel = (t) => {
 
 // ================= 初始化 =================
 onMounted(async () => {
-  await loadFiles()
+  await Promise.all([
+    loadFiles(),
+    loadStats()
+  ])
 
   const target = String(route.query.orderId || route.query.highlight || '').trim()
   const restoredId = String(route.query.restoredFileId || '').trim()

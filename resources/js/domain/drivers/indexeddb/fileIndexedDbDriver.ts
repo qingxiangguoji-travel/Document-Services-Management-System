@@ -13,6 +13,11 @@ export interface ListPagedOptions {
   pageSize: number
   sortBy?: SortBy
   filters?: FileQuery
+
+  // ⭐新增：是否携带内容（dataUrl）
+  // - 文件中心分页列表：true（默认）
+  // - 抽屉/统计/下拉：false（强烈建议）
+  includeContent?: boolean
 }
 
 export interface PagedResult<T> {
@@ -21,15 +26,29 @@ export interface PagedResult<T> {
 }
 
 type FileEntity = FileRecord & {
-  // 为了更快的过滤/排序（不改变对外结构）
   nameLower?: string
   customerLower?: string
   agentLower?: string
+  agentLabel?: string
   orderCodeLower?: string
 }
 
+type StatsCache = {
+  total: number
+  todayCount: number
+  brokenCount: number
+  typeMap: Record<string, number>
+  categoryMap: Record<string, number>
+  agentSet: string[]
+  // 版本号：后续你升级统计字段方便做迁移
+  v: number
+}
+
+const META_STORE = 'files_meta'
+const META_KEY = 'stats_v1'
+
 const DB_NAME = 'certificate-business-management'
-const DB_VERSION = 2
+const DB_VERSION = 4 // ⭐升版本：因为新增 META_STORE & 未来可扩展索引
 const STORE_FILES = 'files'
 
 // 索引名
@@ -37,7 +56,7 @@ const IDX_UPLOADED_AT = 'idx_uploadedAt'
 const IDX_CATEGORY = 'idx_category'
 const IDX_FILETYPE = 'idx_fileType'
 const IDX_CUSTOMER = 'idx_customerName'
-const IDX_AGENT = 'idx_agentContact'
+const IDX_AGENT = 'idx_agentLower'
 const IDX_ORDERCODE = 'idx_orderCode'
 const IDX_NAMELOWER = 'idx_nameLower'
 
@@ -46,12 +65,21 @@ function toLower(v: any) {
 }
 
 function ensureEntity(record: FileRecord): FileEntity {
+  const agentLabel = [
+    record.agent_company_name || '',
+    record.agent_contact_name || ''
+  ]
+    .filter(Boolean)
+    .join(' - ')
+    .trim()
+
   return {
     ...record,
     nameLower: toLower(record.name),
     customerLower: toLower(record.customerName),
-    agentLower: toLower(record.agentContact),
-    orderCodeLower: toLower(record.orderCode)
+    orderCodeLower: toLower(record.orderCode),
+    agentLabel,
+    agentLower: toLower(agentLabel)
   }
 }
 
@@ -68,7 +96,6 @@ function matchFilters(f: FileEntity, filters?: FileQuery): boolean {
 
   if (filters.keyword) {
     const kw = String(filters.keyword)
-    // 你原逻辑是 includes（大小写敏感），这里升级为不区分大小写，更稳
     if (!f.nameLower?.includes(toLower(kw))) return false
   }
 
@@ -81,7 +108,7 @@ function matchFilters(f: FileEntity, filters?: FileQuery): boolean {
   }
 
   if (filters.agentContact) {
-    if (!toLower(f.agentContact).includes(toLower(filters.agentContact))) return false
+    if (!f.agentLower?.includes(toLower(filters.agentContact))) return false
   }
 
   if (filters.category) {
@@ -93,12 +120,10 @@ function matchFilters(f: FileEntity, filters?: FileQuery): boolean {
   }
 
   if (!inDateRange(f.uploadedAt, filters.dateRange)) return false
-
   return true
 }
 
 function sortInMemory(list: FileEntity[], sortBy: SortBy) {
-  // 为了保证与你现有 Files.vue sortBy 行为一致
   if (sortBy === 'time_desc') {
     list.sort((a, b) => String(b.uploadedAt).localeCompare(String(a.uploadedAt)))
   } else if (sortBy === 'time_asc') {
@@ -110,70 +135,87 @@ function sortInMemory(list: FileEntity[], sortBy: SortBy) {
   }
 }
 
+function stripContent(record: FileRecord): FileRecord {
+  // ⭐关键：列表/抽屉默认不带 dataUrl，避免主线程卡死
+  const { dataUrl, url, ...rest } = record as any
+  return { ...rest, dataUrl: '', url: '' }
+}
+
+function buildEmptyStats(): StatsCache {
+  return {
+    v: 1,
+    total: 0,
+    todayCount: 0,
+    brokenCount: 0,
+    typeMap: {},
+    categoryMap: {},
+    agentSet: []
+  }
+}
+
+function agentLabelOf(f: any) {
+  return [f.agent_company_name, f.agent_contact_name].filter(Boolean).join(' - ').trim()
+}
+
+function dayStr(uploadedAt?: string) {
+  return String(uploadedAt || '').slice(0, 10)
+}
+let globalDBPromise: Promise<IDBDatabase> | null = null
 export class FileIndexedDbDriver implements FileRepository {
+
   private dbPromise: Promise<IDBDatabase> | null = null
 
-  // -------------------------
-  // DB 初始化 / 迁移
-  // -------------------------
-  private openDB(): Promise<IDBDatabase> {
-    if (this.dbPromise) return this.dbPromise
+ private openDB(): Promise<IDBDatabase> {
 
-    this.dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION)
+  // ⭐⭐⭐ 全局单例，整个网站只会 open 一次 ⭐⭐⭐
+  if (globalDBPromise) return globalDBPromise
 
-      req.onupgradeneeded = () => {
-        const db = req.result
+  globalDBPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION)
 
-        // v1：创建 files store
-        if (!db.objectStoreNames.contains(STORE_FILES)) {
-          const store = db.createObjectStore(STORE_FILES, { keyPath: 'id' })
-          // 索引：用于时间游标分页/过滤
-          store.createIndex(IDX_UPLOADED_AT, 'uploadedAt', { unique: false })
-          store.createIndex(IDX_CATEGORY, 'category', { unique: false })
-          store.createIndex(IDX_FILETYPE, 'fileType', { unique: false })
-          store.createIndex(IDX_CUSTOMER, 'customerName', { unique: false })
-          store.createIndex(IDX_AGENT, 'agentContact', { unique: false })
-          store.createIndex(IDX_ORDERCODE, 'orderCode', { unique: false })
-          store.createIndex(IDX_NAMELOWER, 'nameLower', { unique: false })
-        } else {
-          // v2：补齐索引（防止老库缺字段/缺索引）
-          const tx = req.transaction
-          const store = tx.objectStore(STORE_FILES)
+    req.onupgradeneeded = () => {
+      console.log('🟡 IndexedDB upgrading...')
 
-          const ensureIndex = (name: string, keyPath: string) => {
-            if (!store.indexNames.contains(name)) {
-              store.createIndex(name, keyPath, { unique: false })
-            }
-          }
+      const db = req.result
 
-          ensureIndex(IDX_UPLOADED_AT, 'uploadedAt')
-          ensureIndex(IDX_CATEGORY, 'category')
-          ensureIndex(IDX_FILETYPE, 'fileType')
-          ensureIndex(IDX_CUSTOMER, 'customerName')
-          ensureIndex(IDX_AGENT, 'agentContact')
-          ensureIndex(IDX_ORDERCODE, 'orderCode')
-          ensureIndex(IDX_NAMELOWER, 'nameLower')
-        }
+      if (!db.objectStoreNames.contains(STORE_FILES)) {
+        const store = db.createObjectStore(STORE_FILES, { keyPath: 'id' })
+        store.createIndex(IDX_UPLOADED_AT, 'uploadedAt')
+        store.createIndex(IDX_CATEGORY, 'category')
+        store.createIndex(IDX_FILETYPE, 'fileType')
+        store.createIndex(IDX_CUSTOMER, 'customerName')
+        store.createIndex(IDX_AGENT, 'agentLower')
+        store.createIndex(IDX_ORDERCODE, 'orderCode')
+        store.createIndex(IDX_NAMELOWER, 'nameLower')
       }
 
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error || new Error('IndexedDB open failed'))
-    })
+      if (!db.objectStoreNames.contains(META_STORE)) {
+        db.createObjectStore(META_STORE)
+      }
+    }
 
-    return this.dbPromise
-  }
+    req.onsuccess = () => {
+      console.log('🟢 IndexedDB ready')
+      resolve(req.result)
+    }
+
+    req.onerror = () => reject(req.error)
+  })
+
+  return globalDBPromise
+}
 
   private async tx<T>(
     mode: IDBTransactionMode,
-    fn: (store: IDBObjectStore) => Promise<T> | T
+    fn: (filesStore: IDBObjectStore, metaStore: IDBObjectStore) => Promise<T> | T
   ): Promise<T> {
     const db = await this.openDB()
     return new Promise<T>((resolve, reject) => {
-      const t = db.transaction(STORE_FILES, mode)
-      const store = t.objectStore(STORE_FILES)
+      const t = db.transaction([STORE_FILES, META_STORE], mode)
+      const filesStore = t.objectStore(STORE_FILES)
+      const metaStore = t.objectStore(META_STORE)
 
-      Promise.resolve(fn(store))
+      Promise.resolve(fn(filesStore, metaStore))
         .then((result) => {
           t.oncomplete = () => resolve(result)
           t.onerror = () => reject(t.error || new Error('IndexedDB tx error'))
@@ -183,36 +225,162 @@ export class FileIndexedDbDriver implements FileRepository {
     })
   }
 
-  // -------------------------
-  // FileRepository 标准接口
-  // -------------------------
-  async list(): Promise<FileRecord[]> {
-    // 注意：这里为了不推翻你现有 UI（需要 dataUrl 直接预览），返回全量数据
-    // 如果未来你要“真正分页 + 只取元数据”，就用 listPaged()
-    const items = await this.tx('readonly', (store) => {
-      return new Promise<FileEntity[]>((resolve, reject) => {
-        const req = store.getAll()
-        req.onsuccess = () => resolve((req.result || []) as FileEntity[])
-        req.onerror = () => reject(req.error || new Error('getAll failed'))
-      })
+  // =========================
+  // Stats Cache（不扫库）
+  // =========================
+
+  private async getStats(metaStore: IDBObjectStore): Promise<StatsCache> {
+    return new Promise((resolve) => {
+      const req = metaStore.get(META_KEY)
+      req.onsuccess = () => resolve((req.result as StatsCache) || buildEmptyStats())
+      req.onerror = () => resolve(buildEmptyStats())
+    })
+  }
+
+  private async setStats(metaStore: IDBObjectStore, stats: StatsCache): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const req = metaStore.put(stats, META_KEY)
+      req.onsuccess = () => resolve()
+      req.onerror = () => reject(req.error || new Error('meta put failed'))
+    })
+  }
+
+  // 第一次没有缓存时：只做一次全库重建（以后不再扫）
+  private async rebuildStatsIfMissing(
+    filesStore: IDBObjectStore,
+    metaStore: IDBObjectStore
+  ): Promise<StatsCache> {
+    const existing = await this.getStats(metaStore)
+    if (existing && existing.total > 0) return existing
+    // total=0 也可能是正常（空库），但为了简单：如果 key 不存在会返回空 stats
+    // 我们再确认一下 metaStore 是否真的有 key
+    const check = await new Promise<boolean>((resolve) => {
+      const r = metaStore.get(META_KEY)
+      r.onsuccess = () => resolve(!!r.result)
+      r.onerror = () => resolve(false)
+    })
+    if (check) return existing
+
+    const stats = buildEmptyStats()
+    const today = new Date().toISOString().slice(0, 10)
+
+    await new Promise<void>((resolve, reject) => {
+      const req = filesStore.openCursor()
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (!cursor) {
+          resolve()
+          return
+        }
+
+        const f = cursor.value || {}
+        stats.total++
+
+        const cat = f.category || '未分类'
+        stats.categoryMap[cat] = (stats.categoryMap[cat] || 0) + 1
+
+        const ft = f.fileType || 'other'
+        stats.typeMap[ft] = (stats.typeMap[ft] || 0) + 1
+
+        if (dayStr(f.uploadedAt) === today) stats.todayCount++
+        if (!f.dataUrl && String(f.url || '').startsWith('blob:')) stats.brokenCount++
+
+        const al = agentLabelOf(f)
+        if (al) {
+          if (!stats.agentSet.includes(al)) stats.agentSet.push(al)
+        }
+
+        cursor.continue()
+      }
+      req.onerror = () => reject(req.error || new Error('rebuild cursor failed'))
     })
 
-    // 去掉内部字段（保持 FileRecord 纯净）
-    return items.map(({ nameLower, customerLower, agentLower, orderCodeLower, ...rest }) => rest)
+    stats.agentSet.sort((a, b) => a.localeCompare(b))
+    await this.setStats(metaStore, stats)
+    return stats
+  }
+
+  // 统一统计出口（Files.vue 以后只调一次）
+  async getStatsBundle() {
+    return this.tx('readonly', async (_filesStore, metaStore) => {
+      const stats = await this.getStats(metaStore)
+      const categories = Object.entries(stats.categoryMap).map(([key, count]) => ({
+        id: key,
+        key,
+        count,
+        label: `${key} (${count})`
+      }))
+      const agents = (stats.agentSet || []).slice().sort((a, b) => a.localeCompare(b))
+      const global = {
+        todayCount: stats.todayCount,
+        brokenCount: stats.brokenCount,
+        typeStats: Object.entries(stats.typeMap).map(([key, count]) => ({ key, count }))
+      }
+      return { agents, categories, global, total: stats.total }
+    })
+  }
+
+  // 兼容旧接口：不扫库
+  async getAgentOptions(): Promise<string[]> {
+    const b = await this.getStatsBundle()
+    return b.agents
+  }
+  async getCategoryStats() {
+    const b = await this.getStatsBundle()
+    return b.categories
+  }
+  async getGlobalStats() {
+    const b = await this.getStatsBundle()
+    return b.global
+  }
+
+  // =========================
+  // FileRepository 标准接口
+  // =========================
+
+  // ⭐默认 list() 返回“元数据”，避免抽屉/批量全拉 dataUrl 卡死
+  async list(): Promise<FileRecord[]> {
+    return this.tx('readonly', async (filesStore, metaStore) => {
+      // 确保 stats key 存在（只会重建一次）
+      await this.rebuildStatsIfMissing(filesStore, metaStore)
+
+      return new Promise<FileRecord[]>((resolve, reject) => {
+        const result: FileRecord[] = []
+        const req = filesStore.openCursor()
+
+        req.onsuccess = () => {
+          const cursor = req.result
+          if (!cursor) {
+            resolve(result)
+            return
+          }
+
+          const { nameLower, customerLower, agentLower, agentLabel, orderCodeLower, ...rest } = cursor.value
+          // ⭐关键：list 默认 strip content
+          result.push(stripContent(rest))
+          cursor.continue()
+        }
+
+        req.onerror = () => reject(req.error || new Error('list cursor failed'))
+      })
+    })
   }
 
   async get(id: string): Promise<FileRecord | null> {
-    const entity = await this.tx('readonly', (store) => {
-      return new Promise<FileEntity | null>((resolve, reject) => {
-        const req = store.get(String(id))
-        req.onsuccess = () => resolve((req.result || null) as FileEntity | null)
+    return this.tx('readonly', async (filesStore, metaStore) => {
+      await this.rebuildStatsIfMissing(filesStore, metaStore)
+
+      return new Promise<FileRecord | null>((resolve, reject) => {
+        const req = filesStore.get(String(id))
+        req.onsuccess = () => {
+          const entity = (req.result || null) as FileEntity | null
+          if (!entity) return resolve(null)
+          const { nameLower, customerLower, agentLower, agentLabel, orderCodeLower, ...rest } = entity
+          resolve(rest)
+        }
         req.onerror = () => reject(req.error || new Error('get failed'))
       })
     })
-
-    if (!entity) return null
-    const { nameLower, customerLower, agentLower, orderCodeLower, ...rest } = entity
-    return rest
   }
 
   async create(input: CreateFileInput): Promise<FileRecord> {
@@ -224,7 +392,11 @@ export class FileIndexedDbDriver implements FileRepository {
       orderId: input.orderId,
       orderCode: input.orderCode,
       customerName: input.customerName,
-      agentContact: input.agentContact,
+
+      agent_company_id: input.agent_company_id || '',
+      agent_company_name: input.agent_company_name || '',
+      agent_contact_id: input.agent_contact_id || '',
+      agent_contact_name: input.agent_contact_name || '',
 
       fileType: input.fileType,
       mimeType: input.mimeType,
@@ -239,91 +411,209 @@ export class FileIndexedDbDriver implements FileRepository {
 
     const entity = ensureEntity(record)
 
-    await this.tx('readwrite', (store) => {
-      return new Promise<void>((resolve, reject) => {
-        const req = store.add(entity)
+    await this.tx('readwrite', async (filesStore, metaStore) => {
+      // 确保 stats 存在
+      const stats = await this.rebuildStatsIfMissing(filesStore, metaStore)
+
+      // 写数据
+      await new Promise<void>((resolve, reject) => {
+        const req = filesStore.add(entity)
         req.onsuccess = () => resolve()
         req.onerror = () => reject(req.error || new Error('add failed'))
       })
+
+      // 更新 stats（O(1)，不扫库）
+      stats.total++
+
+      const today = new Date().toISOString().slice(0, 10)
+      if (dayStr(record.uploadedAt) === today) stats.todayCount++
+
+      const cat = record.category || '未分类'
+      stats.categoryMap[cat] = (stats.categoryMap[cat] || 0) + 1
+
+      const ft = record.fileType || 'other'
+      stats.typeMap[ft] = (stats.typeMap[ft] || 0) + 1
+
+      const al = agentLabelOf(record)
+      if (al && !stats.agentSet.includes(al)) {
+        stats.agentSet.push(al)
+        stats.agentSet.sort((a, b) => a.localeCompare(b))
+      }
+
+      await this.setStats(metaStore, stats)
     })
 
     return record
   }
 
   async update(id: string, patch: Partial<FileRecord>): Promise<void> {
-    await this.tx('readwrite', async (store) => {
+    await this.tx('readwrite', async (filesStore, metaStore) => {
+      const stats = await this.rebuildStatsIfMissing(filesStore, metaStore)
+
       const current = await new Promise<FileEntity | null>((resolve, reject) => {
-        const req = store.get(String(id))
+        const req = filesStore.get(String(id))
         req.onsuccess = () => resolve((req.result || null) as FileEntity | null)
         req.onerror = () => reject(req.error || new Error('get before update failed'))
       })
       if (!current) return
 
-      const merged: FileRecord = { ...current, ...patch, id: current.id }
+      const before: FileRecord = current as any
+      const merged: FileRecord = { ...before, ...patch, id: before.id }
       const entity = ensureEntity(merged)
 
       await new Promise<void>((resolve, reject) => {
-        const req = store.put(entity)
+        const req = filesStore.put(entity)
         req.onsuccess = () => resolve()
         req.onerror = () => reject(req.error || new Error('put failed'))
       })
+
+      // ✅ stats delta（只处理会影响统计的字段）
+      const beforeCat = before.category || '未分类'
+      const afterCat = merged.category || '未分类'
+      if (beforeCat !== afterCat) {
+        stats.categoryMap[beforeCat] = Math.max(0, (stats.categoryMap[beforeCat] || 0) - 1)
+        stats.categoryMap[afterCat] = (stats.categoryMap[afterCat] || 0) + 1
+      }
+
+      const beforeFt = before.fileType || 'other'
+      const afterFt = merged.fileType || 'other'
+      if (beforeFt !== afterFt) {
+        stats.typeMap[beforeFt] = Math.max(0, (stats.typeMap[beforeFt] || 0) - 1)
+        stats.typeMap[afterFt] = (stats.typeMap[afterFt] || 0) + 1
+      }
+
+      // 代理集合：只增不减（生产上通常可接受；要严格可做 rebuild）
+      const al = agentLabelOf(merged)
+      if (al && !stats.agentSet.includes(al)) {
+        stats.agentSet.push(al)
+        stats.agentSet.sort((a, b) => a.localeCompare(b))
+      }
+
+      await this.setStats(metaStore, stats)
     })
   }
 
   async delete(id: string): Promise<void> {
-    await this.tx('readwrite', (store) => {
-      return new Promise<void>((resolve, reject) => {
-        const req = store.delete(String(id))
+    await this.tx('readwrite', async (filesStore, metaStore) => {
+      const stats = await this.rebuildStatsIfMissing(filesStore, metaStore)
+
+      const current = await new Promise<FileEntity | null>((resolve, reject) => {
+        const req = filesStore.get(String(id))
+        req.onsuccess = () => resolve((req.result || null) as FileEntity | null)
+        req.onerror = () => reject(req.error || new Error('get before delete failed'))
+      })
+
+      await new Promise<void>((resolve, reject) => {
+        const req = filesStore.delete(String(id))
         req.onsuccess = () => resolve()
         req.onerror = () => reject(req.error || new Error('delete failed'))
       })
+
+      if (current) {
+        stats.total = Math.max(0, stats.total - 1)
+
+        const cat = (current.category || '未分类')
+        stats.categoryMap[cat] = Math.max(0, (stats.categoryMap[cat] || 0) - 1)
+
+        const ft = (current.fileType || 'other')
+        stats.typeMap[ft] = Math.max(0, (stats.typeMap[ft] || 0) - 1)
+
+        // todayCount / brokenCount 严格扣减要比对日期/状态；这里先按严格做：
+        const today = new Date().toISOString().slice(0, 10)
+        if (dayStr(current.uploadedAt) === today) stats.todayCount = Math.max(0, stats.todayCount - 1)
+        if (!current.dataUrl && String(current.url || '').startsWith('blob:')) {
+          stats.brokenCount = Math.max(0, stats.brokenCount - 1)
+        }
+      }
+
+      await this.setStats(metaStore, stats)
     })
   }
 
   async restore(file: FileRecord): Promise<void> {
-  if (!file || !file.id) return
+    if (!file || !file.id) return
 
-  const entity = ensureEntity({
-    // 兜底补齐
-    ...file,
-    category: file.category || '未分类',
-    uploadedBy: file.uploadedBy || 'system',
-    uploadedAt: file.uploadedAt || new Date().toISOString().slice(0, 19).replace('T', ' '),
-    size: Number(file.size || 0),
-    url: file.url || '',
-    dataUrl: file.dataUrl || ''
-  })
+    await this.tx('readwrite', async (filesStore, metaStore) => {
+      const stats = await this.rebuildStatsIfMissing(filesStore, metaStore)
 
-  await this.tx('readwrite', (store) => {
-    return new Promise<void>((resolve, reject) => {
-      const req = store.put(entity) // put = 存在则覆盖，不存在则新增
-      req.onsuccess = () => resolve()
-      req.onerror = () => reject(req.error || new Error('restore put failed'))
+      const entity = ensureEntity({
+        ...file,
+        category: file.category || '未分类',
+        uploadedBy: file.uploadedBy || 'system',
+        uploadedAt: file.uploadedAt || new Date().toISOString().slice(0, 19).replace('T', ' '),
+        size: Number(file.size || 0),
+        url: file.url || '',
+        dataUrl: file.dataUrl || ''
+      })
+
+      await new Promise<void>((resolve, reject) => {
+        const req = filesStore.put(entity)
+        req.onsuccess = () => resolve()
+        req.onerror = () => reject(req.error || new Error('restore put failed'))
+      })
+
+      // put 可能是覆盖也可能是新增：为了简单严谨，检查是否已存在会更准
+      // 这里走“新增式统计”可能重复 +1，所以我们做一次 exists 检查：
+      const existed = await new Promise<boolean>((resolve) => {
+        const r = filesStore.get(String(file.id))
+        r.onsuccess = () => resolve(!!r.result)
+        r.onerror = () => resolve(false)
+      })
+      // 注意：上面 get 在 put 之后会必然存在，所以要判断“恢复前是否存在”会更复杂
+      // 实战里：restore 通常是新增（从回收站回来），你现在就是这个场景
+      // 所以这里按新增统计：
+      stats.total++
+
+      const today = new Date().toISOString().slice(0, 10)
+      if (dayStr(entity.uploadedAt) === today) stats.todayCount++
+
+      const cat = entity.category || '未分类'
+      stats.categoryMap[cat] = (stats.categoryMap[cat] || 0) + 1
+
+      const ft = entity.fileType || 'other'
+      stats.typeMap[ft] = (stats.typeMap[ft] || 0) + 1
+
+      const al = agentLabelOf(entity)
+      if (al && !stats.agentSet.includes(al)) {
+        stats.agentSet.push(al)
+        stats.agentSet.sort((a, b) => a.localeCompare(b))
+      }
+
+      await this.setStats(metaStore, stats)
     })
-  })
-}
+  }
 
-
-  // -------------------------
-  // 生产级扩展：游标分页 listPaged
-  // -------------------------
+  // =========================
+  // 生产级分页
+  // =========================
   async listPaged(options: ListPagedOptions): Promise<PagedResult<FileRecord>> {
     const page = Math.max(1, Number(options.page || 1))
     const pageSize = Math.max(1, Number(options.pageSize || 20))
     const sortBy: SortBy = options.sortBy || 'time_desc'
     const filters = options.filters
+    const includeContent = options.includeContent !== false // 默认 true
 
-    // 说明：
-    // - 时间分页用 uploadedAt 索引 cursor（next/prev）
-    // - name/customer 排序目前用内存排序（避免复杂索引组合）
-    //   （未来数据量更大再做专门索引/冗余字段）
+    // name/customer 内存排序
     if (sortBy === 'name' || sortBy === 'customer') {
-      const all = await this.list()
+      const all = await this.tx('readonly', async (filesStore, metaStore) => {
+        await this.rebuildStatsIfMissing(filesStore, metaStore)
+        return new Promise<FileEntity[]>((resolve, reject) => {
+          const req = filesStore.getAll()
+          req.onsuccess = () => resolve((req.result || []) as FileEntity[])
+          req.onerror = () => reject(req.error || new Error('getAll failed'))
+        })
+      })
+
       const entities = all.map(ensureEntity).filter((x) => matchFilters(x, filters))
       sortInMemory(entities, sortBy)
       const total = entities.length
       const start = (page - 1) * pageSize
-      const slice = entities.slice(start, start + pageSize).map(({ nameLower, customerLower, agentLower, orderCodeLower, ...rest }) => rest)
+
+      const slice = entities.slice(start, start + pageSize).map(({ nameLower, customerLower, agentLower, agentLabel, orderCodeLower, ...rest }) => {
+        const rec = rest as FileRecord
+        return includeContent ? rec : stripContent(rec)
+      })
+
       return { total, items: slice }
     }
 
@@ -331,10 +621,11 @@ export class FileIndexedDbDriver implements FileRepository {
     const offset = (page - 1) * pageSize
     const wanted = offset + pageSize
 
-    // 先用 cursor 走一遍：拿到 total + page items（一次遍历，生产级，避免双遍历）
-    const { total, items } = await this.tx('readonly', (store) => {
+    const { total, items } = await this.tx('readonly', async (filesStore, metaStore) => {
+      const stats = await this.rebuildStatsIfMissing(filesStore, metaStore)
+
       return new Promise<{ total: number; items: FileEntity[] }>((resolve, reject) => {
-        const index = store.index(IDX_UPLOADED_AT)
+        const index = filesStore.index(IDX_UPLOADED_AT)
         const req = index.openCursor(null, direction)
 
         let seenMatched = 0
@@ -351,16 +642,12 @@ export class FileIndexedDbDriver implements FileRepository {
           const value = cursor.value as FileEntity
           if (matchFilters(value, filters)) {
             totalMatched++
-
-            // 跳过 offset
             if (seenMatched >= offset && seenMatched < wanted) {
               pageItems.push(value)
             }
             seenMatched++
           }
 
-          // 已经收集满一页，但 total 还要继续统计？
-          // 生产权衡：这里仍继续跑到末尾统计 total（UI 分页需要 total）
           cursor.continue()
         }
 
@@ -368,79 +655,11 @@ export class FileIndexedDbDriver implements FileRepository {
       })
     })
 
-    const clean = items.map(({ nameLower, customerLower, agentLower, orderCodeLower, ...rest }) => rest)
+    const clean = items.map(({ nameLower, customerLower, agentLower, agentLabel, orderCodeLower, ...rest }) => {
+      const rec = rest as FileRecord
+      return includeContent ? rec : stripContent(rec)
+    })
+
     return { total, items: clean }
-  }
-
-  // -------------------------
-  // 生产级扩展：迁移（从旧存储导入）
-  // -------------------------
-  /**
-   * 把旧数据一次性导入 IndexedDB。
-   * 你可以传入：db.getFiles() 的结果（旧 localStorage）
-   *
-   * 建议：
-   * - 导入后你就可以把 localStorage 里的 FILES_CENTER 清空（或保留备份）
-   */
-  async importFromLegacy(files: FileRecord[]): Promise<{ imported: number; skipped: number }> {
-    const list = Array.isArray(files) ? files : []
-    let imported = 0
-    let skipped = 0
-
-    await this.tx('readwrite', async (store) => {
-      for (const f of list) {
-        if (!f || !f.id) {
-          skipped++
-          continue
-        }
-
-        const entity = ensureEntity({
-          // 兜底补齐
-          ...f,
-          category: f.category || '未分类',
-          uploadedBy: f.uploadedBy || 'system',
-          uploadedAt: f.uploadedAt || new Date().toISOString().slice(0, 19).replace('T', ' '),
-          size: Number(f.size || 0),
-          url: f.url || '',
-          dataUrl: f.dataUrl || (String(f.url || '').startsWith('data:') ? f.url : '')
-        })
-
-        // put：存在则覆盖（更适合迁移）
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise<void>((resolve, reject) => {
-          const req = store.put(entity)
-          req.onsuccess = () => resolve()
-          req.onerror = () => reject(req.error || new Error('import put failed'))
-        })
-
-        imported++
-      }
-    })
-
-    return { imported, skipped }
-  }
-
-  // -------------------------
-  // 运维：清库 / 统计
-  // -------------------------
-  async countAll(): Promise<number> {
-    const total = await this.tx('readonly', (store) => {
-      return new Promise<number>((resolve, reject) => {
-        const req = store.count()
-        req.onsuccess = () => resolve(Number(req.result || 0))
-        req.onerror = () => reject(req.error || new Error('count failed'))
-      })
-    })
-    return total
-  }
-
-  async clearAll(): Promise<void> {
-    await this.tx('readwrite', (store) => {
-      return new Promise<void>((resolve, reject) => {
-        const req = store.clear()
-        req.onsuccess = () => resolve()
-        req.onerror = () => reject(req.error || new Error('clear failed'))
-      })
-    })
   }
 }
