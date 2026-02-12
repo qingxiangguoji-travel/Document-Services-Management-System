@@ -180,6 +180,57 @@ async upload(input: CreateFileInput): Promise<FileRecord> {
 
     return zip.generateAsync({ type: 'blob' })
   },
+  
+  
+  // ==================================================
+// ⭐行业核心：保存订单时绑定草稿文件
+// ==================================================
+async bindDraftFilesToOrder(
+  draftId: string,
+  order: {
+    id: string
+    order_no: string
+    customerName?: string
+    agent_company_id?: string
+    agent_company_name?: string
+    agent_contact_id?: string
+    agent_contact_name?: string
+  }
+): Promise<void> {
+  if (!draftId) return
+
+  const files = await repository.list()
+
+  const draftFiles = files.filter(f => String(f.draftId) === String(draftId))
+  if (!draftFiles.length) {
+    console.log('[FileService] 没有找到草稿文件:', draftId)
+    return
+  }
+
+  console.log(`[FileService] 正在绑定 ${draftFiles.length} 个草稿文件到订单 ${order.id}`)
+
+  for (const f of draftFiles) {
+    await repository.update(f.id, {
+      // ⭐⭐⭐ 关键：清除草稿标记 ⭐⭐⭐
+      draftId: '',
+
+      // ⭐⭐⭐ 绑定到正式订单 ⭐⭐⭐
+      orderId: order.id,
+      orderCode: order.order_no,
+
+      customerName: order.customerName || f.customerName || '',
+
+      // ⭐⭐⭐ 补全代理字段（防止遗漏）⭐⭐⭐
+      agent_company_id: order.agent_company_id || f.agent_company_id || '',
+      agent_company_name: order.agent_company_name || f.agent_company_name || '',
+      agent_contact_id: order.agent_contact_id || f.agent_contact_id || '',
+      agent_contact_name: order.agent_contact_name || f.agent_contact_name || ''
+    })
+  }
+
+  console.log('[FileService] 草稿文件绑定完成')
+},
+
 
   // =========================
   // 清理失效文件
@@ -225,17 +276,6 @@ async upload(input: CreateFileInput): Promise<FileRecord> {
 
     return ''
   },
-  async getAgentOptions() {
-  return repository.getAgentOptions()
-},
-
-async getCategoryStats() {
-  return repository.getCategoryStats()
-},
-
-async getGlobalStats() {
-  return repository.getGlobalStats()
-},
 // ✅ 新增：一次性拿到全部统计（优先走 repository.getStatsBundle）
 async getStatsBundle() {
   const repo: any = repository
@@ -288,4 +328,27 @@ async listByOrder(orderId?: string, orderCode?: string) {
     String(f.orderCode || '') === String(orderCode || '')
   )
 },
+// =========================
+// 删除草稿订单全部文件 ⭐
+// =========================
+async deleteDraftFiles(draftId: string) {
+  if (!draftId) return
+
+  const res = await this.listPaged({
+    page: 1,
+    pageSize: 9999
+  })
+
+  const draftFiles = (res.items || []).filter(f =>
+    // ✅ 新数据：草稿字段
+    String((f as any).draftId || '') === String(draftId) ||
+    // ✅ 旧数据兼容：曾经把 draftId 写到 orderId
+    String((f as any).orderId || '') === String(draftId)
+  )
+
+  if (!draftFiles.length) return
+
+  await Promise.all(draftFiles.map(f => repository.delete(f.id)))
+},
+
 }

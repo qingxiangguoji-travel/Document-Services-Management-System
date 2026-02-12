@@ -270,12 +270,11 @@
       </PageLayout>
       
       <!-- 文件管理抽屉 -->
-      <file-manager-drawer 
+      <file-manager-drawer
         v-model:visible="fileState.show" 
         :customer-data="fileState.data"
         :order-data="form"
         :customer-id="fileState.customerId"
-        :row-id="fileState.rowId"
         @save="onFilesSaved" 
       />
       
@@ -311,7 +310,7 @@
 import { softDelete } from '@/domain/recycleService'
 import { isStatusEditable } from '@/domain/orderStatus'
 import { ref, reactive, computed, onMounted, nextTick, watch, onActivated, onUnmounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElConfigProvider, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { Plus, User, Download, Upload, Printer, Check, EditPen, Delete } from '@element-plus/icons-vue'
@@ -325,6 +324,18 @@ import { professionalPrint } from './components/print-styles/print-utils'
 import { normalizeOrderForSave } from '@/utils/orderAdapter'
 import { dryRunMigrate, commitMigrate } from '@/domain/services/orderMigrationService'
 import { auth } from '@/utils/auth'
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard'
+import { fileService } from '@/domain/services/fileService'
+
+
+const genDraftId = () =>
+  `DRAFT_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+
+
+const { markDirty, markClean, isDirty } = useUnsavedGuard()
+
+const fileDrawerOrderKey = computed(() => String(form.id || form.draft_id || ''))
+
 
 // 当前登录用户（权限核心）
 const currentUser = auth.getUser()
@@ -674,9 +685,6 @@ const normalizeFileRecord = (raw, ctx) => {
   }
 }
 
-const isDirty = ref(false)
-let formSnapshot = ''
-
 // 日期快捷选项
 const dateShortcuts = [
   { text: '今天', value: new Date() },
@@ -737,6 +745,7 @@ const form = reactive({
   id: null,
   order_no: '',
   created_at: new Date().toISOString().split('T')[0],
+  draft_id: genDraftId(),
   
 agent_company_id: null,
 agent_company_name: '',
@@ -756,6 +765,19 @@ agent_contact_name: '',
   converted_at: null,
   confirmed_at: null
 })
+
+
+// ⭐ 表单变化即标记未保存（企业级方案）
+watch(
+  form,
+  () => {
+    markDirty()
+  },
+  { deep: true }
+)
+
+
+
 
 // ==================== 新增：表格事件处理 ====================
 /**
@@ -1008,12 +1030,17 @@ const fileState = reactive({
  * 处理文件管理 - 适配重构后的表格组件
  */
 const handleFiles = (data) => {
-  // data 是从重构表格组件传递过来的对象，包含 rowId, customerId, customerName, rowData
-  fileState.data = data.rowData  // 使用 rowData
+  // ⭐先写数据，再打开抽屉（顺序必须反过来）
+  fileState.data = data.rowData
   fileState.customerId = data.customerId
   fileState.rowId = data.rowId
-  fileState.show = true
+
+  nextTick(() => {
+    fileState.show = true
+  })
 }
+
+
 
 // ==================== 新增：右键添加业务功能 ====================
 /**
@@ -1234,62 +1261,6 @@ const addBusiness = () => {
 }
 
 // ==================== 文件相关方法 ====================
-/**
- * 文件保存回调
- */
-const onFilesSaved = (groups) => {
-  if (!fileState.rowId || !form.customers) return
-  
-  const rowIndex = form.customers.findIndex(
-    r => r.id === fileState.rowId
-  )
-  if (rowIndex === -1) return
-  
-  // 1. 展平分组
-  const flatFiles = []
-  groups.forEach(g => {
-    g.files.forEach(f => {
-      flatFiles.push({
-        ...f,
-        category: g.title
-      })
-    })
-  })
-  
-  // 2. 写回订单行
-  form.customers[rowIndex].files = flatFiles
-  
-  // 3. 文件中心 = 唯一权威接口
-  const center = db.getFiles()
-  
-  const safeOrderId = form.id || `TEMP_${form.order_no}`
-  
-  // 只移除当前订单 + 当前行的旧文件
-  const filtered = center.filter(f =>
-    !(String(f.orderId) === String(safeOrderId) &&
-      String(f.rowId) === String(fileState.rowId))
-  )
-  
-  // 标准化写入
-  const normalized = flatFiles.map(f =>
-    normalizeFileRecord(f, {
-      orderId: safeOrderId,
-      orderCode: form.order_no,
-      customerId: form.customers[rowIndex].customer_id,
-      customerName: form.customers[rowIndex].name || '',
-      rowId: fileState.rowId,
-      uploadedBy: form.service_staff || 'system'
-    })
-  )
-  
-  db.saveFiles([...filtered, ...normalized])
-  
-  console.log('📁 文件中心已同步', {
-    orderId: safeOrderId,
-    rowId: fileState.rowId,
-    count: normalized.length
-  })
-}
 
 // ==================== 导入导出相关 ====================
 /**
@@ -1768,6 +1739,25 @@ const handlePrint = async () => {
   }
 }
 
+
+// ==================== 草稿文件清理 ====================
+const clearDraftFiles = async () => {
+  // 已保存订单不删
+  if (form.id) return
+  if (!form.draft_id) return
+
+  try {
+    console.log('[Draft] 开始删除草稿文件:', form.draft_id)
+
+    await fileService.deleteFilesByOrderId(form.draft_id)
+
+    console.log('[Draft] 草稿文件已删除')
+  } catch (e) {
+    console.error('删除草稿文件失败', e)
+  }
+}
+
+
 // ==================== 表单提交 ====================
 /**
  * 提交表单
@@ -1817,67 +1807,67 @@ if (!form.agent_company_id) {
   
   saving.value = true
   try {
-const snapRate = 10
+    const snapRate = 10
 
-    
-const payload = {
-  ...normalizeOrderForSave({
-    ...form,
-    customers: form.customers.map(r => ({ ...r, files: [] }))
-  }),
+    const payload = {
+      ...normalizeOrderForSave({
+        ...form,
+        customers: form.customers.map(r => ({ ...r, files: [] }))
+      }),
 
-  id: form.id || Date.now(),
-  created_seq: form.created_seq || Date.now(),
+      id: form.id || Date.now(),
+      created_seq: form.created_seq || Date.now(),
 
-  // ✅ 企业标准：写入 4 字段
-  agent_contact_id: form.agent_contact_id,
-  agent_contact_name: form.agent_contact_name,
-  agent_company_id: form.agent_company_id,
-  agent_company_name: form.agent_company_name,
-      
+      // ✅ 企业标准：写入 4 字段
+      agent_contact_id: form.agent_contact_id,
+      agent_contact_name: form.agent_contact_name,
+      agent_company_id: form.agent_company_id,
+      agent_company_name: form.agent_company_name,
+
       source_order_id: form.source_order_id || null,
       linked_order_id: form.linked_order_id || null,
       converted_at: form.converted_at || null,
       confirmed_at: form.confirmed_at || null,
-      
+
       agent_commission_rate: snapRate,
       commission_settled: false,
       deleted: false,
       deleted_at: null
     }
-    
-    const updatedOrders = form.id ? 
-      allOrders.map(o => o.id === form.id ? payload : o) : 
-      [payload, ...allOrders]
-    
+
+    const updatedOrders = form.id
+      ? allOrders.map(o => o.id === form.id ? payload : o)
+      : [payload, ...allOrders]
+
     db.saveRaw('ORDERS', updatedOrders)
-    
-    // 🔥 把数据库ID同步回表单
+
+    // 🔥 同步表单ID（关键）
     form.id = payload.id
-    // 🔥 回填文件中心临时订单ID（统一走文件中心接口）
-    const files = db.getFiles()
-    
-    const fixed = files.map(f => {
-      if (f.orderId === `TEMP_${form.order_no}`) {
-        return {
-          ...f,
-          orderId: payload.id
-        }
-      }
-      return f
-    })
-    
-    db.saveFiles(fixed)
-    
+
+    // ⭐⭐⭐ 核心修复：完整绑定草稿文件到正式订单 ⭐⭐⭐
+    if (form.draft_id) {
+      await fileService.bindDraftFilesToOrder(form.draft_id, {
+        id: String(payload.id),
+        order_no: payload.code || form.order_no,
+        customerName: '', // 可选：如果需要统一客户名
+        agent_company_id: payload.agent_company_id,
+        agent_company_name: payload.agent_company_name,
+        agent_contact_id: payload.agent_contact_id,
+        agent_contact_name: payload.agent_contact_name
+      })
+    }
+
     ElMessage.success(isEditMode.value ? '订单修改成功' : '新订单创建成功')
+    markClean()
     router.push({ name: 'business.orders' })
   } catch (error) {
     console.error('保存失败:', error)
     ElMessage.error('保存失败：' + error.message)
-  } finally { 
-    saving.value = false 
+  } finally {
+    saving.value = false
   }
 }
+
 
 const loadOrderById = (id) => {
   const orders = db.getRaw('ORDERS') || []
@@ -1918,6 +1908,7 @@ if (form.agent_contact_id && (!form.agent_company_id || !form.agent_company_name
   handleAgentContactChange(form.agent_contact_id)
 }
 syncAgentToRows()
+nextTick(() => markClean())
 }
 
 const goToStaffManage = () => {
@@ -1997,64 +1988,62 @@ window.addEventListener('focus', loadStaffOptions)
 // ==================== 生命周期 ====================
 onMounted(() => {
   loadData()
-  // ===============================
-  // ⭐ 多租户：代理自动锁定公司
-  // ===============================
+
+
+  // 多租户自动锁定公司
   if (currentUser?.role === 'agent') {
     const agents = db.getAgents()
     const myCompany = agents.find(
       a => String(a.id) === String(currentUser.agent_company_id)
     )
-    
-    if (myCompany) {
-form.agent_company_id = myCompany.id
-form.agent_company_name = myCompany.name
 
-// 你现有系统里 currentUser.id 就当作 contact_id 使用（保持一致）
-form.agent_contact_id = currentUser.id
-form.agent_contact_name = currentUser.name
-      
-      nextTick(() => {
-        form.agent_company_locked = true
-      })
+    if (myCompany) {
+      form.agent_company_id = myCompany.id
+      form.agent_company_name = myCompany.name
+      form.agent_contact_id = currentUser.id
+      form.agent_contact_name = currentUser.name
     }
   }
-  
+
   // 编辑模式
   if (route.query.id) {
     isEditMode.value = true
     loadOrderById(route.query.id)
+    nextTick(() => markClean())
   } else {
-    // 新建模式
     if (!form.order_no) updateOrderNo()
     if (!form.customers.length) addRow()
   }
-  
-  nextTick(() => {
-    console.log('OrderTable ref:', orderTableRef.value)
-    if (orderTableRef.value) {
-      console.log('表格组件已正确加载')
-    }
-    nextTick(() => {
-      formSnapshot = JSON.stringify(form)
-    })
-  })
-  // ===============================
-  // 代理禁止编辑订单
-  // ===============================
+
   if (currentUser?.role === 'agent' && route.query.id) {
     ElMessage.error('代理账号不允许编辑订单')
     router.push({ name: 'business.orders' })
   }
 })
 
-watch(
-  form,
-  () => {
-    isDirty.value = JSON.stringify(form) !== formSnapshot
-  },
-  { deep: true }
-)
+
+// ==================== 离开页面清理草稿 ====================
+onBeforeRouteLeave((to, from, next) => {
+  // 没有修改 → 直接走
+  if (!isDirty.value) return next()
+
+  // 已保存订单 → 不清理
+  if (form.id) return next()
+
+  ElMessageBox.confirm(
+    '订单尚未保存，离开后上传的文件将被删除，是否继续？',
+    '未保存提醒',
+    { type: 'warning' }
+  )
+    .then(async () => {
+      await fileService.deleteDraftFiles(form.draft_id)
+      next()
+    })
+    .catch(() => {
+      next(false)
+    })
+})
+
 
 watch(
   () => route.query.id,
@@ -2085,8 +2074,7 @@ watch(
     // 🔥 加载新订单
     nextTick(() => {
       loadOrderById(newId)
-      formSnapshot = JSON.stringify(form)
-      isDirty.value = false
+	  markClean() 
     })
   }
 )
@@ -2095,56 +2083,60 @@ const isHistoryNotifyOrder = () => {
   return orderClass.value === 'history-notify'
 }
 
+// ⭐⭐⭐ 修复：新建订单时清理旧草稿文件 ⭐⭐⭐
 const handleCreateNew = () => {
-  const doReset = () => {
-    // 重置表单
+  const oldDraftId = form.draft_id
+
+  const doReset = async () => {
     Object.assign(form, {
       id: null,
+      draft_id: genDraftId(),
       order_no: '',
       created_at: new Date().toISOString().split('T')[0],
-      
-agent_company_id: null,
-agent_company_name: '',
-agent_contact_id: '',
-agent_contact_name: '',
-
+      agent_company_id: null,
+      agent_company_name: '',
+      agent_contact_id: '',
+      agent_contact_name: '',
       service_staff: '',
       remark: '',
       customers: [],
-      
       status: 'Pending',
-      
-      // 🔥 身份必须重置
       order_type: 'notify',
       source_order_id: null,
       linked_order_id: null,
       converted_at: null,
       confirmed_at: null
     })
-    
-    // 生成新订单号 + 默认一行
+
     nextTick(() => {
       updateOrderNo()
       addRow()
       currentModule.value = 'all'
       isEditMode.value = false
-      formSnapshot = JSON.stringify(form)
-      isDirty.value = false
     })
-    
+
+    markClean()
     ElMessage.success('已新建空白订单')
   }
-  
+
   if (isDirty.value) {
     ElMessageBox.confirm(
       '当前订单尚未保存，是否放弃修改并新建订单？',
       '未保存提醒',
       { type: 'warning' }
-    ).then(doReset)
-  } else {
-    doReset()
+    ).then(async () => {
+      // ✅ 放弃时：删除旧草稿文件（核心）
+      await fileService.deleteDraftFiles(oldDraftId)
+      await doReset()
+    })
+
+    return
   }
+
+  doReset()
 }
+
+
 </script>
 
 <style scoped>

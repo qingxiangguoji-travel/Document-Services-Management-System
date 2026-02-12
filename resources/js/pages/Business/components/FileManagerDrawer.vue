@@ -119,12 +119,22 @@ const router = useRouter()
 const props = defineProps({
   visible: Boolean,
   customerData: Object,
-  orderData: Object
+  orderData: Object,
+  customerId: String,   // ⭐新增
 })
+
 
 const emit = defineEmits(['update:visible'])
 
 const internalVisible = ref(false)
+
+watch(internalVisible, v => emit('update:visible', v))
+
+
+
+// ⭐⭐⭐ 真正的初始化触发器（关键修复）
+// 当抽屉打开 且 客户/订单 已传入 时 才加载文件
+
 
 watch(
   () => props.visible,
@@ -133,12 +143,6 @@ watch(
   },
   { immediate: true }
 )
-
-watch(internalVisible, async (v) => {
-  emit('update:visible', !!v)
-  if (v) await loadFromCenter()
-})
-
 
 // ===== 固定分类 =====
 const FIXED = ['护照封面', '护照首页', '签证页', '劳工证', '签证成品', '劳工证成品']
@@ -152,42 +156,90 @@ const totalFilesCount = computed(() =>
 
 // ===== 从文件中心加载 =====
 const groupByCategory = (files) => {
+  // ⭐ 第一步：永远先创建固定分组（骨架）
+  const groups = FIXED.map(title => ({
+    title,
+    files: []
+  }))
+
   const map = new Map()
+  groups.forEach(g => map.set(g.title, g))
 
-  FIXED.forEach(t => map.set(t, []))
-
-  files.forEach(f => {
+  // ⭐ 第二步：把文件填入分组
+  ;(files || []).forEach(f => {
     const cat = f.category || '未分类'
-    if (!map.has(cat)) map.set(cat, [])
-    map.get(cat).push(f)
+
+    // 如果是自定义分组 → 动态追加
+    if (!map.has(cat)) {
+      const newGroup = { title: cat, files: [] }
+      groups.push(newGroup)
+      map.set(cat, newGroup)
+    }
+
+    map.get(cat).files.push(f)
   })
 
-  return Array.from(map.entries()).map(([title, files]) => ({
-    title,
-    files
-  }))
+  return groups
 }
 
 // 🟢 ADD：从 fileService 读取（IndexedDB / API 都走这里）
 // 替换原来的：const all = await fileService.list()
 
+const getOrderKey = () => {
+  const od = props.orderData || {}
+  const draftId = String(od.draft_id || '')
+  const id = String(od.id || '')
+
+  // ✅ 优先真实id，其次草稿id（必须存在）
+  return id || draftId || ''
+}
+
+const pick = (obj, keys) => {
+  for (const k of keys) {
+    const v = obj?.[k]
+    if (v !== undefined && v !== null && v !== '') return v
+  }
+  return ''
+}
+
+
+
 const loadFromCenter = async () => {
+  const orderCode = pick(props.orderData, ['order_no', 'code', 'orderCode', 'order_code'])
   const orderId = String(props.orderData?.id || '')
-  const orderCode = String(props.orderData?.order_no || props.orderData?.code || '')
+  const draftId = String(props.orderData?.draft_id || '')
+  const customerId = String(props.customerId || '')
+
+  if (!customerId) {
+    localGroups.value = groupByCategory([])
+    return
+  }
 
   const res = await fileService.listPaged({
     page: 1,
-    pageSize: 500, // 当前订单不会太多，给大点
+    pageSize: 500,
     sortBy: 'time_desc',
-    filters: {
-      orderCode: orderCode,
-      // 或者你加一个 orderId filter（如果 driver 支持）
-    }
+    includeContent: false  // ⭐关键：抽屉不需要dataUrl，避免卡顿
   })
 
-  const scoped = (res.items || []).filter(f =>
-    String(f.orderId || '') === orderId || String(f.orderCode || '') === orderCode
-  )
+  const scoped = (res.items || []).filter(f => {
+    const fCustomerId = String(pick(f, ['customerId', 'customer_id']))
+    if (fCustomerId !== customerId) return false
+
+    const fOrderId = String(pick(f, ['orderId', 'order_id']))
+    const fDraftId = String(f.draftId || '')
+
+    // ⭐⭐⭐ 严格匹配：优先级 orderId > draftId（不再用orderCode）⭐⭐⭐
+    if (orderId) {
+      return fOrderId === orderId
+    }
+    
+    if (draftId) {
+      return fDraftId === draftId
+    }
+    
+    return false
+  })
 
   localGroups.value = groupByCategory(scoped)
 }
@@ -195,18 +247,46 @@ const loadFromCenter = async () => {
 
 // ===== 上传直写文件中心 =====
 const handleUpload = async (file, gIdx) => {
+  // ⭐必须存在订单草稿ID
+  if (!props.orderData?.draft_id && !props.orderData?.id) {
+    ElMessage.warning('订单尚未初始化，请刷新页面')
+    return
+  }
+
+  // ⭐必须至少存在一行客户数据
+  if (!props.customerId) {
+    ElMessage.warning('请先添加客户行，再上传资料')
+    return
+  }
+
   const raw = file?.raw
   if (!raw) return
 
+  const orderCode = props.orderData?.order_no || props.orderData?.code || ''
+  const customerId = String(props.customerId || '')
+
+  if (!orderCode || !customerId) {
+    ElMessage.error('缺少订单或客户信息，无法上传')
+    return
+  }
+
   try {
+    // ⭐判断：是否已保存订单
+    const isSavedOrder = !!props.orderData?.id
+
     await fileService.upload({
       name: raw.name,
       category: localGroups.value[gIdx]?.title || '',
 
-      orderId: props.orderData?.id || '',
-      orderCode: props.orderData?.order_no || props.orderData?.code || '',
+      // ⭐⭐⭐ 核心修复1：草稿/正式分离 ⭐⭐⭐
+      draftId: !isSavedOrder ? props.orderData?.draft_id : '',
+      orderId: isSavedOrder ? String(props.orderData?.id) : '',
+      orderCode: isSavedOrder ? props.orderData?.order_no : '',
+
+      customerId: String(props.customerId),
       customerName: props.customerData?.name || '',
 
+      // ⭐⭐⭐ 核心修复2：补全代理字段（关键！）⭐⭐⭐
       agent_company_id: props.orderData?.agent_company_id || '',
       agent_company_name: props.orderData?.agent_company_name || '',
       agent_contact_id: props.orderData?.agent_contact_id || '',
@@ -215,10 +295,7 @@ const handleUpload = async (file, gIdx) => {
       fileType: detectFileType(raw.type, raw.name),
       mimeType: raw.type,
       size: raw.size,
-
-      // ⭐⭐⭐ 改这里：不再用 dataUrl
       blob: raw,
-
       uploadedBy: '当前用户'
     })
 
@@ -229,6 +306,7 @@ const handleUpload = async (file, gIdx) => {
     ElMessage.error('上传失败')
   }
 }
+
 
 
 // ===== 操作 =====
@@ -303,6 +381,23 @@ const jumpToFileCenter = () => {
 }
 
 const addGroup = () => localGroups.value.push({ title: '新增资料项', files: [] })
+
+// ⭐⭐⭐ 抽屉真正的唯一身份 = orderId + rowId
+// ⭐⭐⭐ 抽屉唯一加载入口（唯一！）⭐⭐⭐
+watch(
+  () => internalVisible.value,
+  async (visible) => {
+    if (!visible) return
+    if (!props.orderData) return
+    if (!props.customerData) return
+
+    localGroups.value = groupByCategory([])
+    await nextTick()
+    await loadFromCenter()
+  }
+)
+
+
 </script>
 
 <style scoped>

@@ -4,10 +4,13 @@ export interface FileRecord {
   id: string
   name: string
   category: string
+  draftId?: string
 
   orderId?: string
   orderCode?: string
   customerName?: string
+  customerId?: string
+  rowId?: string
 
   // ⭐ 新增代理正式字段（和订单完全一致）
   agent_company_id?: string
@@ -40,10 +43,13 @@ export interface FileQuery {
 export interface CreateFileInput {
   name: string
   category: string
+  draftId?: string
 
   orderId?: string
   orderCode?: string
   customerName?: string
+  customerId?: string
+  rowId?: string
 
   agent_company_id?: string
   agent_company_name?: string

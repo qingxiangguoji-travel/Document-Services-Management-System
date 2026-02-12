@@ -383,31 +383,36 @@ export class FileIndexedDbDriver implements FileRepository {
     })
   }
 
-  async create(input: CreateFileInput): Promise<FileRecord> {
-    const record: FileRecord = {
-      id: Date.now() + '_' + Math.random().toString(36).slice(2),
-      name: input.name,
-      category: input.category,
+async create(input: CreateFileInput): Promise<FileRecord> {
+  const record: FileRecord = {
+    id: Date.now() + '_' + Math.random().toString(36).slice(2),
+    name: input.name,
+    category: input.category,
+    
+    // ⭐⭐⭐ 关键：必须存储 draftId ⭐⭐⭐
+    draftId: input.draftId || '',
 
-      orderId: input.orderId,
-      orderCode: input.orderCode,
-      customerName: input.customerName,
+    orderId: input.orderId,
+    orderCode: input.orderCode,
+    customerId: input.customerId || '',
+    rowId: input.rowId || '',
+    customerName: input.customerName,
 
-      agent_company_id: input.agent_company_id || '',
-      agent_company_name: input.agent_company_name || '',
-      agent_contact_id: input.agent_contact_id || '',
-      agent_contact_name: input.agent_contact_name || '',
+    agent_company_id: input.agent_company_id || '',
+    agent_company_name: input.agent_company_name || '',
+    agent_contact_id: input.agent_contact_id || '',
+    agent_contact_name: input.agent_contact_name || '',
 
-      fileType: input.fileType,
-      mimeType: input.mimeType,
-      size: Number(input.size || 0),
+    fileType: input.fileType,
+    mimeType: input.mimeType,
+    size: Number(input.size || 0),
 
-      dataUrl: input.dataUrl,
-      url: '',
+    dataUrl: input.dataUrl,
+    url: '',
 
-      uploadedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
-      uploadedBy: input.uploadedBy || 'system'
-    }
+    uploadedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    uploadedBy: input.uploadedBy || 'system'
+  }
 
     const entity = ensureEntity(record)
 

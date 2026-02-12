@@ -998,23 +998,22 @@ const loadFiles = async () => {
     sortBy: sortBy.value,
     filters: filters.value
   })
+  
 
   // ✅ 关键：把分页结果补齐 previewUrl/_broken/fileType
-  const normalized = res.items.map(f => {
-    const fileType = f.fileType || detectFileType(f.mimeType, f.name)
-    const previewUrl = buildPreviewUrl(f)
+const normalized = res.items.map(f => {
+  // ❗不要再把 Base64 放进列表
+  const isBroken =
+    (!f.dataUrl || !String(f.dataUrl).startsWith('data:')) &&
+    String(f.url || '').startsWith('blob:')
 
-    const broken =
-      (!f.dataUrl || !String(f.dataUrl).startsWith('data:')) &&
-      String(f.url || '').startsWith('blob:')
+  return {
+    ...f,
+    previewUrl: '',   // 列表不加载图片
+    _broken: isBroken
+  }
+})
 
-    return {
-      ...f,
-      fileType,
-      previewUrl,
-      _broken: broken || !previewUrl
-    }
-  })
 
   pagedResult.value = {
     total: res.total,
@@ -1188,15 +1187,25 @@ await fileService.upload({
 const previewVisible = ref(false)
 const previewTarget = ref(null)
 
-const previewFile = (f) => {
+const previewFile = async (f) => {
   if (!f || f._broken) {
     previewTarget.value = f
     previewVisible.value = true
     return
   }
-  previewTarget.value = f
-  previewVisible.value = true
+
+  try {
+    const url = await fileService.getContent(f.id)
+    previewTarget.value = {
+      ...f,
+      previewUrl: url
+    }
+    previewVisible.value = true
+  } catch (e) {
+    ElMessage.error('预览失败')
+  }
 }
+
 
 // ================= 下载 =================
 const downloadFile = (f) => {
